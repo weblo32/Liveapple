@@ -371,7 +371,14 @@ export class LiveClassController {
             status: 'ACTIVE',
           },
         });
-        if (!enrollment) {
+        const attendance = await prisma.attendance.findFirst({
+          where: {
+            instituteId: req.user.instituteId,
+            liveClassId: classId,
+            studentId: userId,
+          },
+        });
+        if (!enrollment && !attendance) {
           throw new AppError('FORBIDDEN', 'Student is not enrolled in this batch', 403);
         }
       } else if (req.user.role === 'TEACHER') {

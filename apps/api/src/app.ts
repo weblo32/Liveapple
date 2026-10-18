@@ -61,6 +61,14 @@ export function createApp(): Express {
     return apiLimiter(req, res, next);
   });
 
+  // 4b. Gracefully handle duplicate /api prefix (e.g. /api/api/v1/...) from nested client base URLs
+  app.use((req, _res, next) => {
+    if (req.url.startsWith('/api/api/')) {
+      req.url = req.url.substring(4);
+    }
+    next();
+  });
+
   // 5. API Routes
   app.use('/api', routes);
 

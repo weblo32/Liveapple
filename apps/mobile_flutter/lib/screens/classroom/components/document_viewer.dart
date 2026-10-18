@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_pdfview/flutter_pdfview.dart';
@@ -52,6 +53,7 @@ class _DocumentViewerState extends State<DocumentViewer> {
   String? _currentTitle;
   bool _isDownloading = false;
   String? _errorMessage;
+  String? _errorDetail;
   int _currentPage = 0;
   int _totalPages = 1;
   bool _isPdfReady = false;
@@ -96,7 +98,7 @@ class _DocumentViewerState extends State<DocumentViewer> {
     }
   }
 
-  Future<void> _resolveDocument() async {
+  Future<void> _resolveDocument({bool forceRefetch = false}) async {
     // 1. Check local file path first (for teacher with local file)
     if (widget.docPath != null && widget.docPath!.isNotEmpty) {
       final file = File(widget.docPath!);
@@ -106,6 +108,7 @@ class _DocumentViewerState extends State<DocumentViewer> {
             _resolvedPdfPath = widget.docPath;
             _isDownloading = false;
             _errorMessage = null;
+            _errorDetail = null;
           });
         }
         widget.onDiagnosticsUpdate?.call(
@@ -122,31 +125,51 @@ class _DocumentViewerState extends State<DocumentViewer> {
         setState(() {
           _isDownloading = true;
           _errorMessage = null;
+          _errorDetail = null;
         });
       }
       widget.onDiagnosticsUpdate?.call(fetchStatus: 'Downloading...');
 
+      String tempPath = Directory.systemTemp.path;
       try {
-        String tempPath = Directory.systemTemp.path;
-        try {
-          final tempDir = await getTemporaryDirectory().timeout(const Duration(milliseconds: 300));
+        if (!Platform.environment.containsKey('FLUTTER_TEST')) {
+          final tempDir = await getTemporaryDirectory();
           tempPath = tempDir.path;
-        } catch (_) {
-          tempPath = Directory.systemTemp.path;
         }
-        final sanitized = widget.docUrl!.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
-        final targetFile = File('$tempPath/slides_$sanitized.pdf');
+      } catch (_) {
+        tempPath = Directory.systemTemp.path;
+      }
+      final sanitized = widget.docUrl!.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+      final targetFile = File('$tempPath/slides_$sanitized.pdf');
+
+      try {
+        if (forceRefetch && targetFile.existsSync()) {
+          try {
+            targetFile.deleteSync();
+          } catch (_) {}
+        }
+        if (targetFile.existsSync() && targetFile.lengthSync() == 0) {
+          try {
+            targetFile.deleteSync();
+          } catch (_) {}
+        }
 
         if (!targetFile.existsSync() || targetFile.lengthSync() == 0) {
           final dio = ApiClient().dio;
           var downloadUrl = widget.docUrl!;
-          if (!downloadUrl.startsWith('http')) {
-            final base = dio.options.baseUrl.endsWith('/')
-                ? dio.options.baseUrl.substring(0, dio.options.baseUrl.length - 1)
-                : dio.options.baseUrl;
-            final path = downloadUrl.startsWith('/') ? downloadUrl : '/$downloadUrl';
+          if (!downloadUrl.startsWith('http://') && !downloadUrl.startsWith('https://')) {
+            var base = dio.options.baseUrl;
+            while (base.endsWith('/')) {
+              base = base.substring(0, base.length - 1);
+            }
+            var path = downloadUrl.startsWith('/') ? downloadUrl : '/$downloadUrl';
+            // Prevent duplicate /api when base ends with /api and path starts with /api/
+            if (base.endsWith('/api') && path.startsWith('/api/')) {
+              path = path.substring(4);
+            }
             downloadUrl = '$base$path';
           }
+
           final res = await dio.download(downloadUrl, targetFile.path);
           widget.onDiagnosticsUpdate?.call(
             fetchStatus: '${res.statusCode ?? 200} OK',
@@ -164,10 +187,14 @@ class _DocumentViewerState extends State<DocumentViewer> {
             _resolvedPdfPath = targetFile.path;
             _isDownloading = false;
             _errorMessage = null;
+            _errorDetail = null;
           });
         }
       } catch (e) {
         debugPrint('[DOC_VIEWER] PDF download error: $e');
+        try {
+          if (targetFile.existsSync()) targetFile.deleteSync();
+        } catch (_) {}
         const errorMsg = 'Slides load nahi ho payi';
         widget.onDiagnosticsUpdate?.call(
           fetchStatus: 'Error',
@@ -177,6 +204,7 @@ class _DocumentViewerState extends State<DocumentViewer> {
           setState(() {
             _isDownloading = false;
             _errorMessage = errorMsg;
+            _errorDetail = e.toString();
           });
         }
       }
@@ -491,9 +519,19 @@ class _DocumentViewerState extends State<DocumentViewer> {
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
               ),
+              if (_errorDetail != null && _errorDetail!.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  _errorDetail!,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppColors.slate400, fontSize: 11),
+                ),
+              ],
               const SizedBox(height: 16),
               ElevatedButton.icon(
-                onPressed: _resolveDocument,
+                onPressed: () => _resolveDocument(forceRefetch: true),
                 icon: const Icon(Icons.refresh_rounded, size: 16),
                 label: const Text('Dobara koshish karein'),
                 style: ElevatedButton.styleFrom(

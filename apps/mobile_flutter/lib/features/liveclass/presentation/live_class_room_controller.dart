@@ -677,7 +677,11 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
             isDocPresenting: isDocOpen,
             docTitle: slideDeck?.fileName ?? docData?['title']?.toString() ?? '',
             docPage: slideDeck?.currentPage ?? (docData?['page'] as num?)?.toInt() ?? 1,
-            docUrl: slideDeck?.url ?? docData?['url']?.toString(),
+            docUrl: slideDeck?.url ??
+                docData?['url']?.toString() ??
+                (slideDeck?.deckId != null && slideDeck!.deckId.isNotEmpty && _currentClassId != null
+                    ? '/v1/classes/$_currentClassId/slides/${slideDeck.deckId}'
+                    : null),
             docTotalPages: slideDeck?.totalPages ?? (docData?['totalPages'] as num?)?.toInt() ?? 1,
             slidesDeckId: slideDeck?.deckId,
             slidesFileHash: slideDeck?.fileHash,
@@ -789,11 +793,14 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
       _socket?.on('doc:present', (data) {
         if (data is Map) {
           final deck = SlideDeckModel.fromJson(Map<String, dynamic>.from(data));
+          final docUrl = deck.url ?? (deck.deckId.isNotEmpty && _currentClassId != null
+              ? '/v1/classes/$_currentClassId/slides/${deck.deckId}'
+              : state.docUrl);
           state = state.copyWith(
             isDocPresenting: deck.isOpen,
             docTitle: deck.fileName,
             docPage: deck.currentPage,
-            docUrl: deck.url,
+            docUrl: docUrl,
             docTotalPages: deck.totalPages,
             slidesDeckId: deck.deckId.isNotEmpty ? deck.deckId : state.slidesDeckId,
             slidesFileHash: deck.fileHash ?? state.slidesFileHash,
