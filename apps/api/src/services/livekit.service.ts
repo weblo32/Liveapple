@@ -81,6 +81,61 @@ export class LiveKitService {
   }
 
   /**
+   * List all participants currently in a LiveKit room
+   */
+  static async listParticipants(roomName: string): Promise<any[]> {
+    try {
+      return await this.roomService.listParticipants(roomName);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Update participant publish permissions (e.g. enforce HAND_RAISE_ONLY or lock/unlock speaking)
+   * Note: Students NEVER receive TrackSource.SCREEN_SHARE or SCREEN_SHARE_AUDIO.
+   */
+  static async updateParticipantPermissions(
+    roomName: string,
+    participantId: string,
+    canPublish: boolean
+  ): Promise<void> {
+    try {
+      await this.roomService.updateParticipant(roomName, participantId, undefined, {
+        canPublish,
+        canPublishData: true,
+        canSubscribe: true,
+        canPublishSources: canPublish ? [TrackSource.CAMERA, TrackSource.MICROPHONE] : [],
+      });
+    } catch {
+      // Ignore if LiveKit server is running offline/mock mode in dev
+    }
+  }
+
+  /**
+   * Mute a specific track source (microphone or camera) for a participant
+   */
+  static async muteParticipantTrack(
+    roomName: string,
+    participantId: string,
+    source: TrackSource
+  ): Promise<void> {
+    try {
+      const participants = await this.listParticipants(roomName);
+      const participant = participants.find((p) => p.identity === participantId);
+      if (participant) {
+        for (const track of participant.tracks) {
+          if (track.source === source && !track.muted) {
+            await this.roomService.mutePublishedTrack(roomName, participantId, track.sid, true);
+          }
+        }
+      }
+    } catch {
+      // Ignore in dev
+    }
+  }
+
+  /**
    * Remove/disconnect a participant from the room
    */
   static async removeParticipant(roomName: string, participantId: string): Promise<void> {

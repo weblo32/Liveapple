@@ -7,9 +7,11 @@
     "dev:api": "npm --prefix apps/api run dev",
     "test": "npm --prefix apps/api test",
     "test:api": "npm --prefix apps/api test",
-    "db:reset-demo": "npm --prefix apps/api run db:reset-demo"
+    "db:reset-demo": "npm --prefix apps/api run db:reset-demo",
+    "build:web": "cd apps/mobile_flutter && flutter build web --release --base-href /app/ && node ../../scripts/copy-web-dist.js"
   },
   "devDependencies": {
+    "@livekit/rtc-node": "^1.1.0",
     "concurrently": "^8.2.2"
   }
 }

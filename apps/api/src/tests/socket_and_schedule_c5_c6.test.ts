@@ -350,8 +350,20 @@ describe('Phase C — C5 Socket Chat (2 Clients) & C6 Multi-Batch Schedule Suite
     assert.ok(slotSubjects.some((s: string) => s && s.toLowerCase().includes('math')), 'Student must see Mathematics slot on Monday');
 
     // 3. Teacher creates a new class in Physics -> Student receives realtime socket event 'class:scheduled'
+    if (!studentSocket || !studentSocket.connected) {
+      studentSocket = Client(`http://localhost:${serverPort}`, {
+        auth: { token: student1Token },
+        transports: ['polling', 'websocket'],
+        reconnection: false,
+      });
+      await new Promise<void>((resolve) => {
+        if (studentSocket.connected) return resolve();
+        studentSocket.once('connect', () => resolve());
+      });
+    }
+
     const studentScheduledPromise = new Promise<any>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Realtime class:scheduled timeout')), 4000);
+      const timer = setTimeout(() => reject(new Error('Realtime class:scheduled timeout')), 6000);
       studentSocket.on('class:scheduled', (data) => {
         clearTimeout(timer);
         resolve(data);

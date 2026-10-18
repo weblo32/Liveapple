@@ -174,6 +174,8 @@ model TimetableSlot {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  liveClasses LiveClass[]
+
   @@index([instituteId, teacherId])
   @@index([instituteId, batchId])
   @@index([teacherId, dayOfWeek])
@@ -187,6 +189,8 @@ model LiveClass {
   batch        Batch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
   teacherId    String
   teacher      User         @relation("TeacherLiveClasses", fields: [teacherId], references: [id], onDelete: Restrict)
+  slotId       String?
+  slot         TimetableSlot? @relation(fields: [slotId], references: [id], onDelete: SetNull)
   title        String
   scheduledAt  DateTime
   status       String       @default("SCHEDULED") // "SCHEDULED" | "LIVE" | "ENDED" | "CANCELLED"
@@ -198,6 +202,7 @@ model LiveClass {
   attendances  Attendance[]
   recordings   Recording[]
 
+  @@unique([slotId, scheduledAt])
   @@index([instituteId, status])
   @@index([instituteId, batchId])
   @@index([teacherId, scheduledAt])
@@ -568,5 +573,21 @@ model Purchase {
   @@index([instituteId, studentId])
   @@index([instituteId, status])
   @@index([offeringId])
+}
+
+model ClassSlideDeck {
+  id          String     @id @default(cuid())
+  instituteId String
+  classId     String
+  fileName    String
+  fileSize    Int
+  fileHash    String
+  mimeType    String     @default("application/pdf")
+  totalPages  Int        @default(1)
+  data        Bytes
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([instituteId, classId])
 }
 

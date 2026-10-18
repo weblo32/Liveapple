@@ -10,6 +10,12 @@ class ClassParticipant {
   final bool isHandRaised;
   final int deviceCount;
   final DateTime joinedAt;
+  final bool micPubPresent;
+  final bool micPubMuted;
+  final bool micPubSubscribed;
+  final bool camPubPresent;
+  final bool camPubMuted;
+  final bool camPubSubscribed;
 
   ClassParticipant({
     required this.identity,
@@ -23,6 +29,12 @@ class ClassParticipant {
     this.isHandRaised = false,
     this.deviceCount = 1,
     DateTime? joinedAt,
+    this.micPubPresent = false,
+    this.micPubMuted = true,
+    this.micPubSubscribed = false,
+    this.camPubPresent = false,
+    this.camPubMuted = true,
+    this.camPubSubscribed = false,
   }) : joinedAt = joinedAt ?? DateTime.now();
 
   String get initials {
@@ -30,6 +42,20 @@ class ClassParticipant {
     if (parts.isEmpty || parts[0].isEmpty) return '?';
     if (parts.length == 1) return parts[0][0].toUpperCase();
     return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+  }
+
+  /// Derived real mic mute state: for remote participants, strictly derived from LiveKit publication.
+  bool get isRealMicMuted {
+    if (isLocal) return isMicMuted;
+    if (!micPubPresent) return true;
+    return micPubMuted;
+  }
+
+  /// Derived real camera off state: for remote participants, strictly derived from LiveKit publication.
+  bool get isRealCameraOff {
+    if (isLocal) return isCameraOff;
+    if (!camPubPresent) return true;
+    return camPubMuted;
   }
 
   ClassParticipant copyWith({
@@ -44,6 +70,12 @@ class ClassParticipant {
     bool? isHandRaised,
     int? deviceCount,
     DateTime? joinedAt,
+    bool? micPubPresent,
+    bool? micPubMuted,
+    bool? micPubSubscribed,
+    bool? camPubPresent,
+    bool? camPubMuted,
+    bool? camPubSubscribed,
   }) {
     return ClassParticipant(
       identity: identity ?? this.identity,
@@ -57,6 +89,12 @@ class ClassParticipant {
       isHandRaised: isHandRaised ?? this.isHandRaised,
       deviceCount: deviceCount ?? this.deviceCount,
       joinedAt: joinedAt ?? this.joinedAt,
+      micPubPresent: micPubPresent ?? this.micPubPresent,
+      micPubMuted: micPubMuted ?? this.micPubMuted,
+      micPubSubscribed: micPubSubscribed ?? this.micPubSubscribed,
+      camPubPresent: camPubPresent ?? this.camPubPresent,
+      camPubMuted: camPubMuted ?? this.camPubMuted,
+      camPubSubscribed: camPubSubscribed ?? this.camPubSubscribed,
     );
   }
 
@@ -77,6 +115,12 @@ class ClassParticipant {
           isCameraOff: existing.isCameraOff && p.isCameraOff,
           isSpeaking: existing.isSpeaking || p.isSpeaking,
           isHandRaised: existing.isHandRaised || p.isHandRaised,
+          micPubPresent: existing.micPubPresent || p.micPubPresent,
+          micPubMuted: existing.micPubMuted && p.micPubMuted,
+          micPubSubscribed: existing.micPubSubscribed || p.micPubSubscribed,
+          camPubPresent: existing.camPubPresent || p.camPubPresent,
+          camPubMuted: existing.camPubMuted && p.camPubMuted,
+          camPubSubscribed: existing.camPubSubscribed || p.camPubSubscribed,
         );
       } else {
         map[p.identity] = p;

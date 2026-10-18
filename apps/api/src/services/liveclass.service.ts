@@ -79,11 +79,16 @@ export class LiveClassService {
         const existingClass = await prisma.liveClass.findFirst({
           where: {
             instituteId,
-            batchId: slot.batchId,
-            scheduledAt: {
-              gte: windowStart,
-              lte: windowEnd,
-            },
+            OR: [
+              { slotId: slot.id, scheduledAt: scheduledTime },
+              {
+                batchId: slot.batchId,
+                scheduledAt: {
+                  gte: windowStart,
+                  lte: windowEnd,
+                },
+              },
+            ],
           },
         });
 
@@ -96,6 +101,7 @@ export class LiveClassService {
               instituteId,
               batchId: slot.batchId,
               teacherId: slot.teacherId,
+              slotId: slot.id,
               title: `${slot.batch.subject}: ${slot.batch.name}`,
               scheduledAt: scheduledTime,
               status: 'SCHEDULED',
@@ -116,6 +122,80 @@ export class LiveClassService {
       generatedCount: generatedClasses.length,
       classes: generatedClasses,
     };
+  }
+
+  /**
+   * Start a class directly from a timetable slot (idempotent).
+   * Finds existing class for slotId + target date, or creates one, and starts it.
+   */
+  static async startFromSlot(
+    instituteId: string,
+    user: { id: string; role: string },
+    slotId: string,
+    targetDate: Date = new Date()
+  ) {
+    const slot = await prisma.timetableSlot.findFirst({
+      where: { id: slotId, instituteId },
+      include: { batch: true },
+    });
+
+    if (!slot) {
+      throw new AppError('NOT_FOUND', 'Timetable slot not found', 404);
+    }
+
+    if (user.role === 'TEACHER' && slot.teacherId !== user.id) {
+      throw new AppError('FORBIDDEN', 'Only the assigned teacher can start this slot', 403);
+    }
+
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const targetIst = new Date(targetDate.getTime() + IST_OFFSET_MS);
+    const istYear = targetIst.getUTCFullYear();
+    const istMonth = targetIst.getUTCMonth();
+    const istDate = targetIst.getUTCDate();
+    const hours = Math.floor(slot.startMin / 60);
+    const minutes = slot.startMin % 60;
+    const scheduledUtcMs = Date.UTC(istYear, istMonth, istDate, hours, minutes, 0, 0) - IST_OFFSET_MS;
+    const scheduledTime = new Date(scheduledUtcMs);
+
+    const windowStart = new Date(scheduledTime.getTime() - 45 * 60 * 1000);
+    const windowEnd = new Date(scheduledTime.getTime() + 45 * 60 * 1000);
+
+    // Look for existing class
+    let liveClass = await prisma.liveClass.findFirst({
+      where: {
+        instituteId,
+        OR: [
+          { slotId: slot.id, scheduledAt: scheduledTime },
+          {
+            slotId: slot.id,
+            status: { in: ['SCHEDULED', 'LIVE'] },
+            scheduledAt: { gte: windowStart, lte: windowEnd },
+          },
+        ],
+      },
+    });
+
+    if (!liveClass) {
+      const institute = await prisma.institute.findUnique({ where: { id: instituteId } });
+      const roomSuffix = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      const livekitRoom = `room_${institute?.slug || 'inst'}_b${slot.batchId.slice(-4)}_${roomSuffix}`;
+
+      liveClass = await prisma.liveClass.create({
+        data: {
+          instituteId,
+          batchId: slot.batchId,
+          teacherId: slot.teacherId,
+          slotId: slot.id,
+          title: `${slot.batch.subject}: ${slot.batch.name}`,
+          scheduledAt: scheduledTime,
+          status: 'SCHEDULED',
+          livekitRoom,
+        },
+      });
+    }
+
+    // Start class idempotently (ends other LIVE classes for this teacher)
+    return await this.startClass(instituteId, user, liveClass.id);
   }
 
   /**

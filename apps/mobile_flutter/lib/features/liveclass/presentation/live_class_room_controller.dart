@@ -1,15 +1,20 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:livekit_client/livekit_client.dart' as lk;
+import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import '../data/live_class_repository.dart';
 import '../domain/live_class_model.dart';
 import '../domain/class_participant.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/network/endpoints.dart';
+import '../../../core/network/api_client.dart';
+import 'package:dio/dio.dart';
 import '../../../core/errors/app_exception.dart';
+import '../../../models/slide_deck_model.dart';
 import 'live_class_controller.dart';
 
 class ChatMessageItem {
@@ -99,6 +104,9 @@ class LiveClassRoomState {
   final bool isDocPresenting;
   final String docTitle;
   final int docPage;
+  final String? docPath;
+  final String? docUrl;
+  final int docTotalPages;
   final String? activeSpeakerName;
   final List<ClassParticipant> participants;
   final List<ChatMessageItem> chatMessages;
@@ -118,6 +126,22 @@ class LiveClassRoomState {
   final String? lastLiveKitError;
   final bool isMicLocked;
   final String stage;
+  final bool isSocketConnected;
+  final bool isRoomJoined;
+  final String? lastStageEventSent;
+  final String? lastStageEventReceived;
+  final int boardEventsSent;
+  final int boardEventsReceived;
+  final bool snapshotReceived;
+  final String? slidesDeckId;
+  final String? slidesFileHash;
+  final String? slidesFetchStatus;
+  final int? slidesBytesLoaded;
+  final String? slidesReceiveSource;
+  final String? slidesRenderError;
+  final bool isSlidesUploading;
+  final double? slidesUploadProgress;
+  final bool isSharedWithStudents;
 
   LiveClassRoomState({
     this.liveClass,
@@ -134,6 +158,9 @@ class LiveClassRoomState {
     this.isDocPresenting = false,
     this.docTitle = '',
     this.docPage = 1,
+    this.docPath,
+    this.docUrl,
+    this.docTotalPages = 1,
     this.activeSpeakerName,
     this.participants = const [],
     this.chatMessages = const [],
@@ -153,6 +180,22 @@ class LiveClassRoomState {
     this.lastLiveKitError,
     this.isMicLocked = false,
     this.stage = 'VIDEO',
+    this.isSocketConnected = false,
+    this.isRoomJoined = false,
+    this.lastStageEventSent,
+    this.lastStageEventReceived,
+    this.boardEventsSent = 0,
+    this.boardEventsReceived = 0,
+    this.snapshotReceived = false,
+    this.slidesDeckId,
+    this.slidesFileHash,
+    this.slidesFetchStatus,
+    this.slidesBytesLoaded,
+    this.slidesReceiveSource,
+    this.slidesRenderError,
+    this.isSlidesUploading = false,
+    this.slidesUploadProgress,
+    this.isSharedWithStudents = false,
   });
 
   LiveClassRoomState copyWith({
@@ -170,6 +213,9 @@ class LiveClassRoomState {
     bool? isDocPresenting,
     String? docTitle,
     int? docPage,
+    String? docPath,
+    String? docUrl,
+    int? docTotalPages,
     String? activeSpeakerName,
     List<ClassParticipant>? participants,
     List<ChatMessageItem>? chatMessages,
@@ -189,9 +235,27 @@ class LiveClassRoomState {
     String? lastLiveKitError,
     bool? isMicLocked,
     String? stage,
+    bool? isSocketConnected,
+    bool? isRoomJoined,
+    String? lastStageEventSent,
+    String? lastStageEventReceived,
+    int? boardEventsSent,
+    int? boardEventsReceived,
+    bool? snapshotReceived,
+    String? slidesDeckId,
+    String? slidesFileHash,
+    String? slidesFetchStatus,
+    int? slidesBytesLoaded,
+    String? slidesReceiveSource,
+    String? slidesRenderError,
+    bool? isSlidesUploading,
+    double? slidesUploadProgress,
+    bool? isSharedWithStudents,
     bool clearLocalVideo = false,
     bool clearLocalAudio = false,
     bool clearRemoteScreenShare = false,
+    bool clearDocPath = false,
+    bool clearDocUrl = false,
   }) {
     return LiveClassRoomState(
       liveClass: liveClass ?? this.liveClass,
@@ -208,6 +272,9 @@ class LiveClassRoomState {
       isDocPresenting: isDocPresenting ?? this.isDocPresenting,
       docTitle: docTitle ?? this.docTitle,
       docPage: docPage ?? this.docPage,
+      docPath: clearDocPath ? null : (docPath ?? this.docPath),
+      docUrl: clearDocUrl ? null : (docUrl ?? this.docUrl),
+      docTotalPages: docTotalPages ?? this.docTotalPages,
       activeSpeakerName: activeSpeakerName ?? this.activeSpeakerName,
       participants: participants ?? this.participants,
       chatMessages: chatMessages ?? this.chatMessages,
@@ -227,6 +294,22 @@ class LiveClassRoomState {
       lastLiveKitError: lastLiveKitError ?? this.lastLiveKitError,
       isMicLocked: isMicLocked ?? this.isMicLocked,
       stage: stage ?? this.stage,
+      isSocketConnected: isSocketConnected ?? this.isSocketConnected,
+      isRoomJoined: isRoomJoined ?? this.isRoomJoined,
+      lastStageEventSent: lastStageEventSent ?? this.lastStageEventSent,
+      lastStageEventReceived: lastStageEventReceived ?? this.lastStageEventReceived,
+      boardEventsSent: boardEventsSent ?? this.boardEventsSent,
+      boardEventsReceived: boardEventsReceived ?? this.boardEventsReceived,
+      snapshotReceived: snapshotReceived ?? this.snapshotReceived,
+      slidesDeckId: slidesDeckId ?? this.slidesDeckId,
+      slidesFileHash: slidesFileHash ?? this.slidesFileHash,
+      slidesFetchStatus: slidesFetchStatus ?? this.slidesFetchStatus,
+      slidesBytesLoaded: slidesBytesLoaded ?? this.slidesBytesLoaded,
+      slidesReceiveSource: slidesReceiveSource ?? this.slidesReceiveSource,
+      slidesRenderError: slidesRenderError ?? this.slidesRenderError,
+      isSlidesUploading: isSlidesUploading ?? this.isSlidesUploading,
+      slidesUploadProgress: slidesUploadProgress ?? this.slidesUploadProgress,
+      isSharedWithStudents: isSharedWithStudents ?? this.isSharedWithStudents,
     );
   }
 }
@@ -237,11 +320,16 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
   io.Socket? _socket;
   lk.Room? _liveKitRoom;
   String? _currentClassId;
+  int _boardEventsSent = 0;
+  int _boardEventsReceived = 0;
 
   final StreamController<Map<String, dynamic>> _drawStreamController =
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<void> _clearStreamController =
       StreamController<void>.broadcast();
+
+  static const _screenshareChannel = MethodChannel('com.classora.app/screenshare');
+  Completer<bool>? _screenshareServiceReadyCompleter;
 
   Stream<Map<String, dynamic>> get remoteDrawStream => _drawStreamController.stream;
   Stream<void> get remoteClearStream => _clearStreamController.stream;
@@ -251,7 +339,26 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
     SecureStorageService? storage,
   })  : _repository = repository ?? LiveClassRepository(),
         _storage = storage ?? SecureStorageService(),
-        super(LiveClassRoomState());
+        super(LiveClassRoomState()) {
+    _initScreenshareChannel();
+  }
+
+  void _initScreenshareChannel() {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      _screenshareChannel.setMethodCallHandler((call) async {
+        if (call.method == 'onServiceReady') {
+          if (_screenshareServiceReadyCompleter != null && !_screenshareServiceReadyCompleter!.isCompleted) {
+            _screenshareServiceReadyCompleter!.complete(true);
+          }
+        } else if (call.method == 'onServiceError') {
+          final err = call.arguments?.toString() ?? 'Service error';
+          if (_screenshareServiceReadyCompleter != null && !_screenshareServiceReadyCompleter!.isCompleted) {
+            _screenshareServiceReadyCompleter!.completeError(Exception(err));
+          }
+        }
+      });
+    }
+  }
 
   Future<void> joinRoom(
     String classId, {
@@ -403,14 +510,25 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
             .build(),
       );
 
-      _socket?.onConnect((_) {
+      void onConnected() {
         debugPrint('[SOCKET] Connected to classroom gateway');
         _socket?.emit('class:join', {'classId': classId});
-        state = state.copyWith(connectionState: 'connected');
-      });
+        state = state.copyWith(
+          connectionState: 'connected',
+          isSocketConnected: true,
+          isRoomJoined: true,
+        );
+      }
+
+      _socket?.onConnect((_) => onConnected());
+      _socket?.on('reconnect', (_) => onConnected());
+      if (_socket?.connected == true) {
+        onConnected();
+      }
 
       _socket?.on('connect_error', (err) {
         debugPrint('[SOCKET] Connection error: $err');
+        state = state.copyWith(isSocketConnected: false, isRoomJoined: false);
       });
 
       // 1. Chat History (last 50 messages on join)
@@ -512,7 +630,9 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
 
           final updated = state.participants.map((p) {
             if (p.identity == peerId) {
-              return p.copyWith(isMicMuted: peerMicMuted, isCameraOff: peerCameraOff);
+              final effectiveMic = p.micPubPresent ? p.micPubMuted : peerMicMuted;
+              final effectiveCam = p.camPubPresent ? p.camPubMuted : peerCameraOff;
+              return p.copyWith(isMicMuted: effectiveMic, isCameraOff: effectiveCam);
             }
             return p;
           }).toList();
@@ -526,18 +646,43 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
       // 6b. Snapshot on join/reconnect
       _socket?.on('classroom:snapshot', (data) {
         if (data is Map) {
-          final stage = data['stage']?.toString() ?? 'VIDEO';
+          final st = data['mode']?.toString() ?? data['stage']?.toString() ?? 'VIDEO';
           final isLocked = data['isMicLocked'] == true;
           final boardData = data['board'] as Map?;
-          final isBoardOpen = boardData?['isOpen'] == true;
+          final isBoardOpen = boardData?['isOpen'] == true || st == 'BOARD';
+          final canDraw = boardData?['canDraw'] == true;
           final docData = data['doc'] as Map?;
+
+          // Replay strokes from snapshot
+          if (boardData?['strokes'] is List && !_drawStreamController.isClosed) {
+            final strokesList = boardData!['strokes'] as List;
+            for (final stroke in strokesList) {
+              if (stroke is Map) {
+                _drawStreamController.add(Map<String, dynamic>.from(stroke));
+              }
+            }
+          }
+
+          final docMap = docData is Map ? Map<String, dynamic>.from(docData) : null;
+          final slideDeck = docMap != null ? SlideDeckModel.fromJson(docMap) : null;
+          final isDocOpen = (docMap != null && docMap['isOpen'] == true) || st == 'SLIDES';
+
           state = state.copyWith(
-            stage: stage,
+            snapshotReceived: true,
+            isRoomJoined: true,
+            stage: st,
             isMicLocked: isLocked,
             isWhiteboardOpen: isBoardOpen,
-            isDocPresenting: docData != null && docData['isOpen'] == true,
-            docTitle: docData?['title']?.toString() ?? '',
-            docPage: (docData?['page'] as num?)?.toInt() ?? 1,
+            isBoardAllowed: state.isHost || canDraw,
+            isDocPresenting: isDocOpen,
+            docTitle: slideDeck?.fileName ?? docData?['title']?.toString() ?? '',
+            docPage: slideDeck?.currentPage ?? (docData?['page'] as num?)?.toInt() ?? 1,
+            docUrl: slideDeck?.url ?? docData?['url']?.toString(),
+            docTotalPages: slideDeck?.totalPages ?? (docData?['totalPages'] as num?)?.toInt() ?? 1,
+            slidesDeckId: slideDeck?.deckId,
+            slidesFileHash: slideDeck?.fileHash,
+            slidesReceiveSource: 'snapshot',
+            lastStageEventReceived: 'mode: $st (snapshot) at ${DateTime.now().toIso8601String()}',
           );
         }
       });
@@ -549,23 +694,27 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
         leaveRoom();
       });
 
-      // 6d. Stage sync (Stage 1.2)
-      _socket?.on('stage:changed', (data) {
-        if (data is Map && data['stage'] != null) {
-          final st = data['stage'].toString();
+      // 6d. Stage sync (Stage 1.2) - handles stage:state and stage:changed
+      void handleStageUpdate(dynamic data) {
+        if (data is Map) {
+          final st = data['mode']?.toString() ?? data['stage']?.toString() ?? 'VIDEO';
           state = state.copyWith(
             stage: st,
             isWhiteboardOpen: st == 'BOARD',
             isDocPresenting: st == 'SLIDES',
+            lastStageEventReceived: 'mode: $st at ${DateTime.now().toIso8601String()}',
           );
         }
-      });
+      }
+
+      _socket?.on('stage:state', handleStageUpdate);
+      _socket?.on('stage:changed', handleStageUpdate);
 
       // 7. Host Muted All event
       _socket?.on('host:muted', (data) {
         if (!state.isHost) {
           final isLocked = (data is Map && data['isLocked'] == true);
-          state = state.copyWith(isMicMuted: true, isMicLocked: isLocked);
+          state = state.copyWith(isMicLocked: isLocked);
           state.localAudioTrack?.stop();
         }
       });
@@ -584,11 +733,25 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
 
       // 8. Whiteboard Sync events
       _socket?.on('board:state', (data) {
-        if (data is Map && data['isOpen'] is bool) {
-          final isOpen = data['isOpen'] as bool;
+        if (data is Map) {
+          final isOpen = data['isOpen'] == true;
+          final canDraw = data['canDraw'] == true;
+          _boardEventsReceived++;
+
+          if (data['strokes'] is List && !_drawStreamController.isClosed) {
+            final strokesList = data['strokes'] as List;
+            for (final s in strokesList) {
+              if (s is Map) {
+                _drawStreamController.add(Map<String, dynamic>.from(s));
+              }
+            }
+          }
+
           state = state.copyWith(
             isWhiteboardOpen: isOpen,
+            isBoardAllowed: state.isHost || canDraw,
             stage: isOpen ? 'BOARD' : (state.isDocPresenting ? 'SLIDES' : 'VIDEO'),
+            boardEventsReceived: _boardEventsReceived,
           );
         }
       });
@@ -607,12 +770,16 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
 
       // 8b. Realtime Whiteboard strokes sync
       _socket?.on('whiteboard:draw', (data) {
+        _boardEventsReceived++;
+        state = state.copyWith(boardEventsReceived: _boardEventsReceived);
         if (data is Map && !_drawStreamController.isClosed) {
           _drawStreamController.add(Map<String, dynamic>.from(data));
         }
       });
 
       _socket?.on('whiteboard:clear', (_) {
+        _boardEventsReceived++;
+        state = state.copyWith(boardEventsReceived: _boardEventsReceived);
         if (!_clearStreamController.isClosed) {
           _clearStreamController.add(null);
         }
@@ -621,14 +788,25 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
       // 8c. Document Presentation Sync event (Teacher presents to all students)
       _socket?.on('doc:present', (data) {
         if (data is Map) {
-          final isOpen = data['isOpen'] as bool? ?? false;
-          final title = data['title'] as String? ?? '';
-          final page = data['page'] as int? ?? 1;
+          final deck = SlideDeckModel.fromJson(Map<String, dynamic>.from(data));
           state = state.copyWith(
-            isDocPresenting: isOpen,
-            docTitle: title,
-            docPage: page,
+            isDocPresenting: deck.isOpen,
+            docTitle: deck.fileName,
+            docPage: deck.currentPage,
+            docUrl: deck.url,
+            docTotalPages: deck.totalPages,
+            slidesDeckId: deck.deckId.isNotEmpty ? deck.deckId : state.slidesDeckId,
+            slidesFileHash: deck.fileHash ?? state.slidesFileHash,
+            slidesReceiveSource: 'event',
+            stage: deck.isOpen ? 'SLIDES' : (state.isWhiteboardOpen ? 'BOARD' : 'VIDEO'),
           );
+        }
+      });
+
+      _socket?.on('doc:page', (data) {
+        if (data is Map) {
+          final page = (data['currentPage'] ?? data['page'] as num?)?.toInt() ?? 1;
+          state = state.copyWith(docPage: page);
         }
       });
 
@@ -644,7 +822,11 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
       });
 
       _socket?.onDisconnect((_) {
-        state = state.copyWith(connectionState: 'disconnected');
+        state = state.copyWith(
+          connectionState: 'disconnected',
+          isSocketConnected: false,
+          isRoomJoined: false,
+        );
       });
     } catch (e) {
       debugPrint('[SOCKET] Setup error: $e');
@@ -680,7 +862,12 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
               updated[event.participant.identity] = vt;
               final updatedParticipants = state.participants.map((p) {
                 if (p.identity == event.participant.identity) {
-                  return p.copyWith(isCameraOff: false);
+                  return p.copyWith(
+                    camPubPresent: true,
+                    camPubMuted: false,
+                    camPubSubscribed: true,
+                    isCameraOff: false,
+                  );
                 }
                 return p;
               }).toList();
@@ -696,7 +883,12 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
             } catch (_) {}
             final updatedParticipants = state.participants.map((p) {
               if (p.identity == event.participant.identity) {
-                return p.copyWith(isMicMuted: false);
+                return p.copyWith(
+                  micPubPresent: true,
+                  micPubMuted: false,
+                  micPubSubscribed: true,
+                  isMicMuted: false,
+                );
               }
               return p;
             }).toList();
@@ -714,7 +906,7 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
               updated.remove(event.participant.identity);
               final updatedParticipants = state.participants.map((p) {
                 if (p.identity == event.participant.identity) {
-                  return p.copyWith(isCameraOff: true);
+                  return p.copyWith(camPubSubscribed: false, isCameraOff: true);
                 }
                 return p;
               }).toList();
@@ -726,7 +918,7 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
           } else if (event.track is lk.AudioTrack) {
             final updatedParticipants = state.participants.map((p) {
               if (p.identity == event.participant.identity) {
-                return p.copyWith(isMicMuted: true);
+                return p.copyWith(micPubSubscribed: false, isMicMuted: true);
               }
               return p;
             }).toList();
@@ -734,6 +926,78 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
               participants: ClassParticipant.deduplicateAndSort(updatedParticipants),
             );
           }
+        } else if (event is lk.TrackMutedEvent) {
+          final p = event.participant;
+          final isAudio = event.publication.kind == lk.TrackType.AUDIO;
+          final updatedParticipants = state.participants.map((cp) {
+            if (cp.identity == p.identity) {
+              if (isAudio) {
+                return cp.copyWith(micPubMuted: true, isMicMuted: true);
+              } else {
+                return cp.copyWith(camPubMuted: true, isCameraOff: true);
+              }
+            }
+            return cp;
+          }).toList();
+          state = state.copyWith(
+            participants: ClassParticipant.deduplicateAndSort(updatedParticipants),
+          );
+        } else if (event is lk.TrackUnmutedEvent) {
+          final p = event.participant;
+          final isAudio = event.publication.kind == lk.TrackType.AUDIO;
+          final updatedParticipants = state.participants.map((cp) {
+            if (cp.identity == p.identity) {
+              if (isAudio) {
+                return cp.copyWith(micPubMuted: false, isMicMuted: false);
+              } else {
+                return cp.copyWith(camPubMuted: false, isCameraOff: false);
+              }
+            }
+            return cp;
+          }).toList();
+          state = state.copyWith(
+            participants: ClassParticipant.deduplicateAndSort(updatedParticipants),
+          );
+        } else if (event is lk.TrackPublishedEvent) {
+          final p = event.participant;
+          final isAudio = event.publication.kind == lk.TrackType.AUDIO;
+          final updatedParticipants = state.participants.map((cp) {
+            if (cp.identity == p.identity) {
+              if (isAudio) {
+                return cp.copyWith(
+                  micPubPresent: true,
+                  micPubMuted: event.publication.muted,
+                  isMicMuted: event.publication.muted,
+                );
+              } else {
+                return cp.copyWith(
+                  camPubPresent: true,
+                  camPubMuted: event.publication.muted,
+                  isCameraOff: event.publication.muted,
+                );
+              }
+            }
+            return cp;
+          }).toList();
+          state = state.copyWith(
+            participants: ClassParticipant.deduplicateAndSort(updatedParticipants),
+          );
+        } else if (event is lk.TrackUnpublishedEvent) {
+          final p = event.participant;
+          final isAudio = event.publication.kind == lk.TrackType.AUDIO;
+          final updatedParticipants = state.participants.map((cp) {
+            if (cp.identity == p.identity) {
+              if (isAudio) {
+                return cp.copyWith(micPubPresent: false, isMicMuted: true);
+              } else {
+                return cp.copyWith(camPubPresent: false, isCameraOff: true);
+              }
+            }
+            return cp;
+          }).toList();
+          state = state.copyWith(
+            participants: ClassParticipant.deduplicateAndSort(updatedParticipants),
+          );
         } else if (event is lk.ActiveSpeakersChangedEvent) {
           final speakerIds = event.speakers.map((s) => s.identity).toSet();
           final updatedParticipants = state.participants.map((p) {
@@ -810,6 +1074,8 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
             p.identity.startsWith('teacher') || p.identity.startsWith('admin');
 
         bool hasVideo = false;
+        bool camMuted = true;
+        bool camSub = false;
         for (final trackPub in p.videoTrackPublications) {
           final vt = trackPub.track;
           if (vt != null) {
@@ -818,14 +1084,32 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
             } else {
               updatedVideoTracks[p.identity] = vt;
               hasVideo = true;
+              camMuted = trackPub.muted;
+              camSub = trackPub.subscribed;
             }
           }
+        }
+
+        bool micPresent = false;
+        bool micMuted = true;
+        bool micSub = false;
+        for (final audioPub in p.audioTrackPublications) {
+          micPresent = true;
+          micMuted = audioPub.muted;
+          micSub = audioPub.subscribed;
         }
 
         final existingIdx = newParticipants.indexWhere((cp) => cp.identity == p.identity);
         if (existingIdx >= 0) {
           newParticipants[existingIdx] = newParticipants[existingIdx].copyWith(
-            isCameraOff: !hasVideo,
+            isCameraOff: !hasVideo || camMuted,
+            camPubPresent: hasVideo,
+            camPubMuted: camMuted,
+            camPubSubscribed: camSub,
+            isMicMuted: !micPresent || micMuted,
+            micPubPresent: micPresent,
+            micPubMuted: micMuted,
+            micPubSubscribed: micSub,
           );
         } else {
           newParticipants.add(ClassParticipant(
@@ -834,8 +1118,14 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
             role: isHostPeer ? 'TEACHER' : 'STUDENT',
             isHost: isHostPeer,
             isLocal: false,
-            isMicMuted: true,
-            isCameraOff: !hasVideo,
+            isMicMuted: !micPresent || micMuted,
+            isCameraOff: !hasVideo || camMuted,
+            micPubPresent: micPresent,
+            micPubMuted: micMuted,
+            micPubSubscribed: micSub,
+            camPubPresent: hasVideo,
+            camPubMuted: camMuted,
+            camPubSubscribed: camSub,
           ));
         }
       }
@@ -953,28 +1243,99 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
     }
   }
 
-  Future<void> toggleScreenShare() async {
+  Future<void> toggleScreenShare({void Function(String message)? onError}) async {
     final next = !state.isScreenSharing;
     try {
-      if (_liveKitRoom?.connectionState == lk.ConnectionState.connected) {
-        await _liveKitRoom?.localParticipant?.setScreenShareEnabled(next);
+      if (_liveKitRoom?.connectionState != lk.ConnectionState.connected) {
+        throw Exception('LiveKit is not connected');
+      }
+
+      if (next) {
+        // Turning ON Screen Share
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+          // (a) On Android 13+ request POST_NOTIFICATIONS
+          try {
+            await _screenshareChannel.invokeMethod('requestNotificationPermission');
+          } catch (e) {
+            debugPrint('[SCREEN_SHARE] Notification permission request error: $e');
+          }
+
+          // (b) MediaProjection consent first - exactly ONE dialog (stores token in flutter_webrtc)
+          final hasConsent = await rtc.Helper.requestCapturePermission(fullScreenOnly: true);
+          if (!hasConsent) {
+            debugPrint('[SCREEN_SHARE] User declined MediaProjection consent dialog');
+            return;
+          }
+
+          // (c) Only after consent returns OK, start the MediaProjection foreground service
+          _screenshareServiceReadyCompleter = Completer<bool>();
+          await _screenshareChannel.invokeMethod('startService');
+
+          // (d) Dart WAITS for "ready" acknowledgement with timeout (5s)
+          try {
+            await _screenshareServiceReadyCompleter!.future.timeout(const Duration(seconds: 5));
+          } catch (e) {
+            debugPrint('[SCREEN_SHARE] Service ready acknowledgement timeout or error: $e');
+            try { await _screenshareChannel.invokeMethod('stopService'); } catch (_) {}
+            throw Exception('Screen share foreground service initialization failed');
+          }
+        }
+
+        // Enable screen share track in LiveKit (reuses stored mediaProjectionData)
+        await _liveKitRoom?.localParticipant?.setScreenShareEnabled(true);
+        const nextStage = 'SCREEN';
+        setStage(nextStage);
+        state = state.copyWith(isScreenSharing: true, stage: nextStage);
+      } else {
+        // Turning OFF Screen Share
+        await _liveKitRoom?.localParticipant?.setScreenShareEnabled(false);
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+          try {
+            await _screenshareChannel.invokeMethod('stopService');
+          } catch (e) {
+            debugPrint('[SCREEN_SHARE] stopService error: $e');
+          }
+        }
+        const nextStage = 'VIDEO';
+        setStage(nextStage);
+        state = state.copyWith(isScreenSharing: false, stage: nextStage);
       }
     } catch (e) {
       debugPrint('[SCREEN_SHARE] Toggle error: $e');
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        try {
+          await _screenshareChannel.invokeMethod('stopService');
+        } catch (_) {}
+      }
+      if (onError != null) {
+        onError('Screen share shuru nahi ho paya');
+      }
+      setStage('VIDEO');
+      state = state.copyWith(isScreenSharing: false, stage: 'VIDEO');
     }
-    state = state.copyWith(isScreenSharing: next);
   }
 
   void toggleWhiteboard() {
     final next = !state.isWhiteboardOpen;
-    state = state.copyWith(isWhiteboardOpen: next);
+    final nextStage = next ? 'BOARD' : 'VIDEO';
+    final eventStr = 'mode: $nextStage at ${DateTime.now().toIso8601String()}';
+    _boardEventsSent++;
+    state = state.copyWith(
+      isWhiteboardOpen: next,
+      stage: nextStage,
+      boardEventsSent: _boardEventsSent,
+      lastStageEventSent: eventStr,
+    );
     if (_currentClassId != null && state.isHost) {
       _socket?.emit('board:toggle', {'classId': _currentClassId, 'isOpen': next});
+      _socket?.emit('stage:set', {'classId': _currentClassId, 'stage': nextStage, 'mode': nextStage});
     }
   }
 
   void sendDrawStroke(Map<String, dynamic> stroke) {
     if (_currentClassId != null) {
+      _boardEventsSent++;
+      state = state.copyWith(boardEventsSent: _boardEventsSent);
       _socket?.emit('whiteboard:draw', {
         'classId': _currentClassId,
         'stroke': stroke,
@@ -984,22 +1345,172 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
 
   void sendClearBoard() {
     if (_currentClassId != null) {
+      _boardEventsSent++;
+      state = state.copyWith(boardEventsSent: _boardEventsSent);
       _socket?.emit('whiteboard:clear', {
         'classId': _currentClassId,
       });
     }
   }
 
-  void setDocPresentation({required bool isOpen, String title = '', int page = 1}) {
-    state = state.copyWith(isDocPresenting: isOpen, docTitle: title, docPage: page);
+  void setDocPresentation({
+    required bool isOpen,
+    String title = '',
+    int page = 1,
+    String? path,
+    String? url,
+    int? totalPages,
+    String? deckId,
+    String? fileHash,
+  }) {
+    state = state.copyWith(
+      isDocPresenting: isOpen,
+      docTitle: title.isNotEmpty ? title : state.docTitle,
+      docPage: page,
+      docPath: path ?? (isOpen ? state.docPath : null),
+      docUrl: url ?? (isOpen ? state.docUrl : null),
+      docTotalPages: totalPages ?? state.docTotalPages,
+      slidesDeckId: deckId ?? (isOpen ? state.slidesDeckId : null),
+      slidesFileHash: fileHash ?? (isOpen ? state.slidesFileHash : null),
+      clearDocPath: !isOpen,
+      clearDocUrl: !isOpen,
+      stage: isOpen ? 'SLIDES' : (state.isWhiteboardOpen ? 'BOARD' : 'VIDEO'),
+    );
     if (_currentClassId != null && state.isHost) {
       _socket?.emit('doc:present', {
         'classId': _currentClassId,
         'isOpen': isOpen,
-        'title': title,
+        'deckId': deckId ?? state.slidesDeckId,
+        'title': title.isNotEmpty ? title : state.docTitle,
+        'fileName': title.isNotEmpty ? title : state.docTitle,
         'page': page,
+        'currentPage': page,
+        if (url != null || state.docUrl != null) 'url': url ?? state.docUrl,
+        if (url != null || state.docUrl != null) 'streamUrl': url ?? state.docUrl,
+        if (totalPages != null || state.docTotalPages > 0) 'totalPages': totalPages ?? state.docTotalPages,
+        if (fileHash != null || state.slidesFileHash != null) 'fileHash': fileHash ?? state.slidesFileHash,
+        'stage': 'SLIDES',
       });
     }
+  }
+
+  void setDocPage(int page) {
+    state = state.copyWith(docPage: page);
+    if (_currentClassId != null && state.isHost) {
+      _socket?.emit('doc:page', {
+        'classId': _currentClassId,
+        'page': page,
+        'currentPage': page,
+      });
+      _socket?.emit('doc:present', {
+        'classId': _currentClassId,
+        'isOpen': true,
+        'deckId': state.slidesDeckId,
+        'title': state.docTitle,
+        'fileName': state.docTitle,
+        'page': page,
+        'currentPage': page,
+        if (state.docUrl != null) 'url': state.docUrl,
+        if (state.docUrl != null) 'streamUrl': state.docUrl,
+        'totalPages': state.docTotalPages,
+        if (state.slidesFileHash != null) 'fileHash': state.slidesFileHash,
+        'stage': 'SLIDES',
+      });
+    }
+  }
+
+  Future<void> uploadAndPresentSlides({
+    required String fileName,
+    String? filePath,
+    Uint8List? fileBytes,
+    int? fileSize,
+    void Function(String error)? onError,
+    void Function(String message)? onSuccess,
+  }) async {
+    if (_currentClassId == null) {
+      onError?.call('Class session active nahi hai');
+      return;
+    }
+
+    state = state.copyWith(
+      isSlidesUploading: true,
+      slidesUploadProgress: 0.1,
+      isSharedWithStudents: false,
+    );
+
+    try {
+      MultipartFile multipartFile;
+      if (filePath != null && filePath.isNotEmpty && !kIsWeb) {
+        multipartFile = await MultipartFile.fromFile(filePath, filename: fileName);
+      } else if (fileBytes != null && fileBytes.isNotEmpty) {
+        multipartFile = MultipartFile.fromBytes(fileBytes, filename: fileName);
+      } else {
+        state = state.copyWith(isSlidesUploading: false);
+        onError?.call('File select nahi hui');
+        return;
+      }
+
+      final formData = FormData.fromMap({'file': multipartFile});
+      final res = await ApiClient().dio.post(
+        '${Endpoints.classes}/$_currentClassId/slides',
+        data: formData,
+        onSendProgress: (sent, total) {
+          if (total > 0) {
+            state = state.copyWith(slidesUploadProgress: sent / total);
+          }
+        },
+      );
+
+      final resData = res.data;
+      final rawDeck = (resData is Map && resData['data'] is Map) ? resData['data'] : resData;
+      final deck = (rawDeck is Map) ? SlideDeckModel.fromJson(Map<String, dynamic>.from(rawDeck)) : null;
+
+      final serverUrl = deck?.url ?? (resData is Map ? (resData['streamUrl'] ?? resData['url']) : null);
+      final totalPages = deck?.totalPages ?? (resData is Map ? (resData['totalPages'] as num?)?.toInt() : null) ?? 1;
+      final deckId = deck?.deckId ?? (resData is Map ? (resData['deckId']?.toString()) : null);
+      final fileHash = deck?.fileHash;
+
+      state = state.copyWith(
+        isSlidesUploading: false,
+        slidesUploadProgress: 1.0,
+        isSharedWithStudents: true,
+        slidesDeckId: deckId,
+        slidesFileHash: fileHash,
+      );
+
+      setDocPresentation(
+        isOpen: true,
+        title: fileName,
+        path: filePath,
+        url: serverUrl?.toString(),
+        totalPages: totalPages,
+        deckId: deckId,
+        fileHash: fileHash,
+        page: 1,
+      );
+
+      onSuccess?.call('Shared with students');
+    } catch (e) {
+      state = state.copyWith(
+        isSlidesUploading: false,
+        isSharedWithStudents: false,
+      );
+      const errMsg = 'Upload fail hua, students ko slides nahi dikhengi';
+      debugPrint('[SLIDES_UPLOAD] $errMsg: $e');
+      onError?.call(errMsg);
+    }
+  }
+
+  void updateSlidesDiagnostics({
+    String? fetchStatus,
+    int? bytesLoaded,
+    String? renderError,
+  }) {
+    state = state.copyWith(
+      slidesFetchStatus: fetchStatus ?? state.slidesFetchStatus,
+      slidesBytesLoaded: bytesLoaded ?? state.slidesBytesLoaded,
+      slidesRenderError: renderError ?? state.slidesRenderError,
+    );
   }
 
   void toggleHandRaise(String userName) {
@@ -1052,16 +1563,48 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
     }
   }
 
+  void lowerStudentHand(String studentId) {
+    if (_currentClassId != null && state.isHost) {
+      _socket?.emit('hand:lower', {
+        'classId': _currentClassId,
+        'studentId': studentId,
+      });
+    }
+  }
+
+  void muteStudentMic(String studentId) {
+    if (_currentClassId != null && state.isHost) {
+      _socket?.emit('host:student:action', {
+        'classId': _currentClassId,
+        'studentId': studentId,
+        'action': 'MUTE_MIC',
+      });
+    }
+  }
+
+  void stopStudentCamera(String studentId) {
+    if (_currentClassId != null && state.isHost) {
+      _socket?.emit('host:student:action', {
+        'classId': _currentClassId,
+        'studentId': studentId,
+        'action': 'STOP_CAM',
+      });
+    }
+  }
+
   void setStage(String newStage) {
     if (_currentClassId != null && state.isHost) {
+      final eventStr = 'mode: $newStage at ${DateTime.now().toIso8601String()}';
       _socket?.emit('stage:set', {
         'classId': _currentClassId,
         'stage': newStage,
+        'mode': newStage,
       });
       state = state.copyWith(
         stage: newStage,
         isWhiteboardOpen: newStage == 'BOARD',
         isDocPresenting: newStage == 'SLIDES',
+        lastStageEventSent: eventStr,
       );
     }
   }
@@ -1110,6 +1653,12 @@ class LiveClassRoomNotifier extends StateNotifier<LiveClassRoomState> {
       state.localVideoTrack?.stop();
       state.localAudioTrack?.stop();
     } catch (_) {}
+
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        _screenshareChannel.invokeMethod('stopService');
+      } catch (_) {}
+    }
 
     if (_currentClassId != null) {
       _socket?.emit('class:leave', {'classId': _currentClassId});

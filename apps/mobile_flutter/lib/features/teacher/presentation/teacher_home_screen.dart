@@ -481,7 +481,7 @@ class _TeacherHomeScreenState extends ConsumerState<TeacherHomeScreen> {
                     label: 'Study Material & Notes',
                     onTap: () {
                       Navigator.pop(context);
-                      context.push('/assignments');
+                      context.push('/study-material');
                     },
                   ),
                   _buildDrawerItem(
@@ -709,7 +709,7 @@ class _TeacherHomeScreenState extends ConsumerState<TeacherHomeScreen> {
                     title: 'Study Material',
                     color: AppColors.tileMaterial,
                     icon: Icons.menu_book,
-                    onTap: () => context.push('/assignments'),
+                    onTap: () => context.push('/study-material'),
                   ),
                 ),
               ],

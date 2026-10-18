@@ -122,8 +122,10 @@ export function getGitCommit(): string {
   if (fromEnv) return fromEnv.substring(0, 7);
   try {
     const { execSync } = require('child_process');
-    return execSync('git rev-parse --short HEAD').toString().trim();
+    const out = execSync('git rev-parse --short HEAD', { stdio: ['pipe', 'pipe', 'ignore'] }).toString().trim();
+    if (out) return out;
   } catch {
-    return '17a7ca5';
+    // git not available or not a git repo at runtime
   }
+  return 'unknown';
 }

@@ -1,16 +1,28 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_pdfview/flutter_pdfview.dart';
+import 'package:path_provider/path_provider.dart';
+import '../../../core/network/api_client.dart';
 import '../../../models/models.dart';
 import '../../../theme/app_colors.dart';
-import '../../../data/mock_data.dart';
 
 class DocumentViewer extends StatefulWidget {
   final DocumentItem? initialDocument;
   final VoidCallback? onClose;
   final bool isTeacher;
   final int? syncedPage;
+  final int? syncedTotalPages;
+  final String? docTitle;
+  final String? docPath;
+  final String? docUrl;
+  final bool isSharedWithStudents;
+  final bool isUploading;
+  final double? uploadProgress;
   final Function(int page)? onPageChanged;
   final Function(DocumentItem doc)? onDocumentChanged;
+  final Function(String path, String name)? onLocalFileSelected;
+  final Function({String? fetchStatus, int? bytesLoaded, String? renderError})? onDiagnosticsUpdate;
 
   const DocumentViewer({
     super.key,
@@ -18,8 +30,17 @@ class DocumentViewer extends StatefulWidget {
     this.onClose,
     this.isTeacher = true,
     this.syncedPage,
+    this.syncedTotalPages,
+    this.docTitle,
+    this.docPath,
+    this.docUrl,
+    this.isSharedWithStudents = false,
+    this.isUploading = false,
+    this.uploadProgress,
     this.onPageChanged,
     this.onDocumentChanged,
+    this.onLocalFileSelected,
+    this.onDiagnosticsUpdate,
   });
 
   @override
@@ -27,30 +48,151 @@ class DocumentViewer extends StatefulWidget {
 }
 
 class _DocumentViewerState extends State<DocumentViewer> {
-  late DocumentItem _currentDoc;
+  String? _resolvedPdfPath;
+  String? _currentTitle;
+  bool _isDownloading = false;
+  String? _errorMessage;
   int _currentPage = 0;
-  double _zoomLevel = 1.0;
-
-  late List<DocumentItem> _allDocs;
+  int _totalPages = 1;
+  bool _isPdfReady = false;
+  PDFViewController? _pdfViewController;
 
   @override
   void initState() {
     super.initState();
-    _allDocs = List.from(MockData.sampleDocuments);
-    _currentDoc = widget.initialDocument ?? _allDocs.first;
+    _currentTitle = widget.docTitle ?? widget.initialDocument?.fileName ?? 'PDF Presentation';
     if (widget.syncedPage != null && widget.syncedPage! > 0) {
-      _currentPage = (widget.syncedPage! - 1).clamp(0, _currentDoc.slides.length - 1);
+      _currentPage = widget.syncedPage! - 1;
     }
+    if (widget.syncedTotalPages != null && widget.syncedTotalPages! > 0) {
+      _totalPages = widget.syncedTotalPages!;
+    }
+    _resolveDocument();
   }
 
   @override
   void didUpdateWidget(DocumentViewer oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    if (widget.docTitle != null && widget.docTitle != _currentTitle) {
+      setState(() => _currentTitle = widget.docTitle);
+    }
+
+    if (widget.syncedTotalPages != null && widget.syncedTotalPages! > 0 && widget.syncedTotalPages != _totalPages) {
+      setState(() => _totalPages = widget.syncedTotalPages!);
+    }
+
     if (!widget.isTeacher && widget.syncedPage != null) {
-      final target = (widget.syncedPage! - 1).clamp(0, _currentDoc.slides.length - 1);
-      if (target != _currentPage) {
-        setState(() => _currentPage = target);
+      final target = widget.syncedPage! - 1;
+      if (target >= 0 && target != _currentPage) {
+        _currentPage = target;
+        _pdfViewController?.setPage(target);
+        if (mounted) setState(() {});
       }
+    }
+
+    if (widget.docPath != oldWidget.docPath || widget.docUrl != oldWidget.docUrl) {
+      _resolveDocument();
+    }
+  }
+
+  Future<void> _resolveDocument() async {
+    // 1. Check local file path first (for teacher with local file)
+    if (widget.docPath != null && widget.docPath!.isNotEmpty) {
+      final file = File(widget.docPath!);
+      if (file.existsSync()) {
+        if (mounted) {
+          setState(() {
+            _resolvedPdfPath = widget.docPath;
+            _isDownloading = false;
+            _errorMessage = null;
+          });
+        }
+        widget.onDiagnosticsUpdate?.call(
+          fetchStatus: '200 OK (Local)',
+          bytesLoaded: file.lengthSync(),
+        );
+        return;
+      }
+    }
+
+    // 2. Download from remote URL if provided (for student or remote view)
+    if (widget.docUrl != null && widget.docUrl!.isNotEmpty) {
+      if (mounted) {
+        setState(() {
+          _isDownloading = true;
+          _errorMessage = null;
+        });
+      }
+      widget.onDiagnosticsUpdate?.call(fetchStatus: 'Downloading...');
+
+      try {
+        String tempPath = Directory.systemTemp.path;
+        try {
+          final tempDir = await getTemporaryDirectory().timeout(const Duration(milliseconds: 300));
+          tempPath = tempDir.path;
+        } catch (_) {
+          tempPath = Directory.systemTemp.path;
+        }
+        final sanitized = widget.docUrl!.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+        final targetFile = File('$tempPath/slides_$sanitized.pdf');
+
+        if (!targetFile.existsSync() || targetFile.lengthSync() == 0) {
+          final dio = ApiClient().dio;
+          var downloadUrl = widget.docUrl!;
+          if (!downloadUrl.startsWith('http')) {
+            final base = dio.options.baseUrl.endsWith('/')
+                ? dio.options.baseUrl.substring(0, dio.options.baseUrl.length - 1)
+                : dio.options.baseUrl;
+            final path = downloadUrl.startsWith('/') ? downloadUrl : '/$downloadUrl';
+            downloadUrl = '$base$path';
+          }
+          final res = await dio.download(downloadUrl, targetFile.path);
+          widget.onDiagnosticsUpdate?.call(
+            fetchStatus: '${res.statusCode ?? 200} OK',
+            bytesLoaded: targetFile.lengthSync(),
+          );
+        } else {
+          widget.onDiagnosticsUpdate?.call(
+            fetchStatus: '200 OK (Cached)',
+            bytesLoaded: targetFile.lengthSync(),
+          );
+        }
+
+        if (mounted) {
+          setState(() {
+            _resolvedPdfPath = targetFile.path;
+            _isDownloading = false;
+            _errorMessage = null;
+          });
+        }
+      } catch (e) {
+        debugPrint('[DOC_VIEWER] PDF download error: $e');
+        const errorMsg = 'Slides load nahi ho payi';
+        widget.onDiagnosticsUpdate?.call(
+          fetchStatus: 'Error',
+          renderError: e.toString(),
+        );
+        if (mounted) {
+          setState(() {
+            _isDownloading = false;
+            _errorMessage = errorMsg;
+          });
+        }
+      }
+      return;
+    }
+
+    // 3. For students when presentation is open but URL is still pending
+    if (!widget.isTeacher && (widget.docTitle != null && widget.docTitle!.isNotEmpty)) {
+      if (mounted) {
+        setState(() {
+          _isDownloading = true;
+          _errorMessage = null;
+        });
+      }
+      widget.onDiagnosticsUpdate?.call(fetchStatus: 'Connecting to slide stream...');
+      return;
     }
   }
 
@@ -58,80 +200,65 @@ class _DocumentViewerState extends State<DocumentViewer> {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['pdf', 'ppt', 'pptx', 'doc', 'docx'],
+        allowedExtensions: ['pdf', 'ppt', 'pptx'],
       );
       if (result != null && result.files.isNotEmpty) {
         final file = result.files.first;
-        final isPdf = file.name.toLowerCase().endsWith('.pdf');
-        final newDoc = DocumentItem(
-          id: 'picked_${DateTime.now().millisecondsSinceEpoch}',
-          title: file.name,
-          fileName: file.name,
-          author: 'Teacher (Local File)',
-          type: isPdf ? 'PDF Document' : 'PPT Presentation',
-          slides: [
-            PresentationPage(
-              pageNumber: 1,
-              title: file.name,
-              subtitle: 'Local presentation file (${(file.size / 1024).toStringAsFixed(1)} KB)',
-              points: const [
-                'Custom lecture document loaded from device',
-                'Synchronized live presentation mode active',
-                'Teacher maintains slide control',
-              ],
-              formula: 'Status: Presenting to Classroom',
-              diagramUrl: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=800',
-            ),
-            const PresentationPage(
-              pageNumber: 2,
-              title: 'Detailed Notes & Reference',
-              subtitle: 'Slide 2 of presentation',
-              points: [
-                'All joined students view this presentation simultaneously',
-                'Interactive formulas and lecture notes displayed',
-                'Real-time pagination synced with teacher',
-              ],
-              formula: 'Live Sync: Active',
-              diagramUrl: 'https://images.unsplash.com/photo-1509228468518-180dd4864904?w=800',
-            ),
-          ],
-        );
+        final nameLower = file.name.toLowerCase();
+        if (nameLower.endsWith('.ppt') || nameLower.endsWith('.pptx')) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('PPT ko PDF me export karo ya screen share karo'),
+                backgroundColor: AppColors.rose,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+          return;
+        }
 
-        setState(() {
-          _allDocs.insert(0, newDoc);
-          _currentDoc = newDoc;
-          _currentPage = 0;
-        });
-
-        widget.onDocumentChanged?.call(newDoc);
-        widget.onPageChanged?.call(1);
+        if (file.path != null) {
+          setState(() {
+            _resolvedPdfPath = file.path;
+            _currentTitle = file.name;
+            _isPdfReady = false;
+            _currentPage = 0;
+            _errorMessage = null;
+          });
+          widget.onLocalFileSelected?.call(file.path!, file.name);
+          widget.onPageChanged?.call(1);
+        }
       }
     } catch (e) {
       debugPrint('[DOC_PICKER] Error picking document: $e');
     }
   }
 
-  void _prevSlide() {
+  void _prevPage() {
     if (_currentPage > 0) {
-      setState(() => _currentPage--);
-      widget.onPageChanged?.call(_currentPage + 1);
+      final target = _currentPage - 1;
+      _pdfViewController?.setPage(target);
+      setState(() => _currentPage = target);
+      if (widget.isTeacher) {
+        widget.onPageChanged?.call(target + 1);
+      }
     }
   }
 
-  void _nextSlide() {
-    if (_currentPage < _currentDoc.slides.length - 1) {
-      setState(() => _currentPage++);
-      widget.onPageChanged?.call(_currentPage + 1);
+  void _nextPage() {
+    if (_currentPage < _totalPages - 1) {
+      final target = _currentPage + 1;
+      _pdfViewController?.setPage(target);
+      setState(() => _currentPage = target);
+      if (widget.isTeacher) {
+        widget.onPageChanged?.call(target + 1);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final slides = _currentDoc.slides;
-    final slide = slides.isNotEmpty
-        ? (_currentPage < slides.length ? slides[_currentPage] : slides.first)
-        : null;
-
     return Container(
       color: AppColors.slate900,
       child: Column(
@@ -160,309 +287,110 @@ class _DocumentViewerState extends State<DocumentViewer> {
                     color: AppColors.indigo600.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(
-                    _currentDoc.type.contains('PPT') ? Icons.slideshow_rounded : Icons.picture_as_pdf_rounded,
+                  child: const Icon(
+                    Icons.picture_as_pdf_rounded,
                     color: AppColors.indigo400,
                     size: 18,
                   ),
                 ),
                 const SizedBox(width: 8),
 
-                // Document Picker Dropdown
+                // Document Title & Page Count
                 Expanded(
-                  child: PopupMenuButton<DocumentItem>(
-                    onSelected: (doc) {
-                      setState(() {
-                        _currentDoc = doc;
-                        _currentPage = 0;
-                      });
-                      widget.onDocumentChanged?.call(doc);
-                      widget.onPageChanged?.call(1);
-                    },
-                    itemBuilder: (context) => _allDocs.map((doc) {
-                      return PopupMenuItem<DocumentItem>(
-                        value: doc,
-                        child: Row(
-                          children: [
-                            Icon(
-                              doc.type.contains('PPT') ? Icons.slideshow_rounded : Icons.picture_as_pdf_rounded,
-                              size: 16,
-                              color: doc.id == _currentDoc.id ? AppColors.indigo600 : AppColors.slate600,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                doc.fileName,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: doc.id == _currentDoc.id ? FontWeight.w800 : FontWeight.w500,
-                                  color: doc.id == _currentDoc.id ? AppColors.indigo700 : AppColors.slate900,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _currentTitle ?? 'PDF Presentation',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
                         ),
-                      );
-                    }).toList(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        _isPdfReady
+                            ? 'Page ${_currentPage + 1} of $_totalPages'
+                            : (_isDownloading ? 'Downloading...' : 'PDF Presentation'),
+                        style: const TextStyle(
+                          color: AppColors.indigo300,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Teacher Upload Progress or Shared Status Badge
+                if (widget.isTeacher && widget.isUploading)
+                  Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.primary, width: 0.8),
+                    ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Flexible(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                _currentDoc.fileName,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              Text(
-                                '${_currentDoc.author} • ${slides.length} Pages',
-                                style: const TextStyle(
-                                  color: AppColors.indigo300,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
+                        const SizedBox(
+                          width: 10,
+                          height: 10,
+                          child: CircularProgressIndicator(strokeWidth: 1.5, color: AppColors.primary),
                         ),
-                        const Icon(Icons.arrow_drop_down_rounded, color: AppColors.slate300, size: 18),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Uploading ${widget.uploadProgress != null ? (widget.uploadProgress! * 100).toInt() : 0}%',
+                          style: const TextStyle(color: AppColors.primaryLight, fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (widget.isTeacher && widget.isSharedWithStudents)
+                  Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.emerald.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.emerald, width: 0.8),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.check_circle_rounded, color: AppColors.emerald, size: 12),
+                        SizedBox(width: 4),
+                        Text(
+                          'Shared with students',
+                          style: TextStyle(color: AppColors.emerald, fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
                       ],
                     ),
                   ),
-                ),
 
                 if (widget.isTeacher)
                   IconButton(
                     icon: const Icon(Icons.upload_file_rounded, color: AppColors.indigo300, size: 20),
-                    tooltip: 'Pick PDF / PPT from Device',
+                    tooltip: 'Change PDF File',
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     constraints: const BoxConstraints(),
                     onPressed: _pickLocalDocument,
                   ),
-
-                // Zoom controls
-                IconButton(
-                  icon: const Icon(Icons.zoom_out_rounded, color: AppColors.slate300, size: 18),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  onPressed: () {
-                    setState(() {
-                      if (_zoomLevel > 0.8) _zoomLevel -= 0.1;
-                    });
-                  },
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '${(_zoomLevel * 100).toInt()}%',
-                  style: const TextStyle(color: AppColors.slate300, fontSize: 10, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  icon: const Icon(Icons.zoom_in_rounded, color: AppColors.slate300, size: 18),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  onPressed: () {
-                    setState(() {
-                      if (_zoomLevel < 1.5) _zoomLevel += 0.1;
-                    });
-                  },
-                ),
               ],
             ),
           ),
 
-          // Slide Content Container
+          // Main Presentation Stage
           Expanded(
-            child: slide == null
-                ? const Center(child: Text('No slide content', style: TextStyle(color: Colors.white)))
-                : SingleChildScrollView(
-                    padding: const EdgeInsets.all(16),
-                    child: Center(
-                      child: Transform.scale(
-                        scale: _zoomLevel,
-                        child: Container(
-                          width: double.infinity,
-                          constraints: const BoxConstraints(maxWidth: 700),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.3),
-                                blurRadius: 20,
-                                offset: const Offset(0, 8),
-                              ),
-                            ],
-                          ),
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Slide badge & page number
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.indigo50,
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: AppColors.indigo200),
-                                    ),
-                                    child: Text(
-                                      'PAGE ${_currentPage + 1} OF ${slides.length}',
-                                      style: const TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w800,
-                                        color: AppColors.indigo700,
-                                        letterSpacing: 0.5,
-                                      ),
-                                    ),
-                                  ),
-                                  Text(
-                                    _currentDoc.type.toUpperCase(),
-                                    style: const TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppColors.slate400,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 14),
-
-                              // Title & Subtitle
-                              Text(
-                                slide.title,
-                                style: const TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w900,
-                                  color: AppColors.slate900,
-                                  letterSpacing: -0.5,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                slide.subtitle,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.indigo600,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-
-                              // Points list
-                              ...slide.points.map((p) => Padding(
-                                    padding: const EdgeInsets.only(bottom: 8),
-                                    child: Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        const Padding(
-                                          padding: EdgeInsets.only(top: 4),
-                                          child: Icon(Icons.circle, size: 6, color: AppColors.indigo600),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Text(
-                                            p,
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              height: 1.45,
-                                              color: AppColors.slate700,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  )),
-
-                              const SizedBox(height: 16),
-
-                              // Formula / Principle Box
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.all(14),
-                                decoration: BoxDecoration(
-                                  gradient: const LinearGradient(
-                                    colors: [
-                                      AppColors.indigo900,
-                                      AppColors.indigo950,
-                                    ],
-                                  ),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: AppColors.indigo700),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Row(
-                                      children: [
-                                        Icon(Icons.functions_rounded, color: AppColors.amber400, size: 16),
-                                        SizedBox(width: 6),
-                                        Text(
-                                          'CORE PRINCIPLE / EQUATION',
-                                          style: TextStyle(
-                                            color: AppColors.amber400,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w800,
-                                            letterSpacing: 0.8,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      slide.formula,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w800,
-                                        letterSpacing: 0.5,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-
-                              const SizedBox(height: 16),
-
-                              // Diagram image
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(10),
-                                child: Image.network(
-                                  slide.diagramUrl,
-                                  height: 180,
-                                  width: double.infinity,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) => Container(
-                                    height: 120,
-                                    color: AppColors.slate100,
-                                    alignment: Alignment.center,
-                                    child: const Icon(Icons.broken_image_rounded, color: AppColors.slate400),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
+            child: _buildMainStage(),
           ),
 
-          // Bottom Slide Navigation Bar
+          // Bottom Navigation Bar
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: const BoxDecoration(
@@ -474,7 +402,7 @@ class _DocumentViewerState extends State<DocumentViewer> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       ElevatedButton.icon(
-                        onPressed: _currentPage > 0 ? _prevSlide : null,
+                        onPressed: _currentPage > 0 ? _prevPage : null,
                         icon: const Icon(Icons.arrow_back_rounded, size: 14),
                         label: const Text('Previous', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
                         style: ElevatedButton.styleFrom(
@@ -482,12 +410,12 @@ class _DocumentViewerState extends State<DocumentViewer> {
                           foregroundColor: Colors.white,
                           disabledBackgroundColor: AppColors.slate800,
                           disabledForegroundColor: AppColors.slate600,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         ),
                       ),
                       Text(
-                        'Page ${_currentPage + 1} of ${slides.length}',
+                        'Page ${_currentPage + 1} of $_totalPages',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 12,
@@ -495,7 +423,7 @@ class _DocumentViewerState extends State<DocumentViewer> {
                         ),
                       ),
                       ElevatedButton.icon(
-                        onPressed: _currentPage < slides.length - 1 ? _nextSlide : null,
+                        onPressed: _currentPage < _totalPages - 1 ? _nextPage : null,
                         icon: const Icon(Icons.arrow_forward_rounded, size: 14),
                         label: const Text('Next Page', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
                         style: ElevatedButton.styleFrom(
@@ -503,7 +431,7 @@ class _DocumentViewerState extends State<DocumentViewer> {
                           foregroundColor: Colors.white,
                           disabledBackgroundColor: AppColors.slate800,
                           disabledForegroundColor: AppColors.slate600,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         ),
                       ),
@@ -516,7 +444,7 @@ class _DocumentViewerState extends State<DocumentViewer> {
                         const Icon(Icons.sync_rounded, color: AppColors.indigo400, size: 16),
                         const SizedBox(width: 8),
                         Text(
-                          'Live Presentation • Page ${_currentPage + 1} of ${slides.length}',
+                          'Live Presentation • Page ${_currentPage + 1} of $_totalPages',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 12,
@@ -528,6 +456,193 @@ class _DocumentViewerState extends State<DocumentViewer> {
                   ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildMainStage() {
+    if (_isDownloading) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(color: AppColors.indigo400),
+            SizedBox(height: 16),
+            Text(
+              'PDF slides download ho rahi hain...',
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_errorMessage != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline_rounded, color: AppColors.rose, size: 48),
+              const SizedBox(height: 12),
+              Text(
+                _errorMessage!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _resolveDocument,
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('Dobara koshish karein'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.indigo600,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+              if (widget.isTeacher) ...[
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: _pickLocalDocument,
+                  icon: const Icon(Icons.upload_file_rounded, size: 16),
+                  label: const Text('Device se dusri PDF chunein'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                    side: const BorderSide(color: AppColors.slate600),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_resolvedPdfPath != null) {
+      return Stack(
+        children: [
+          PDFView(
+            key: ValueKey(_resolvedPdfPath),
+            filePath: _resolvedPdfPath!,
+            enableSwipe: widget.isTeacher,
+            swipeHorizontal: false,
+            autoSpacing: true,
+            pageFling: true,
+            pageSnap: true,
+            defaultPage: _currentPage,
+            fitPolicy: FitPolicy.BOTH,
+            preventLinkNavigation: false,
+            onRender: (pages) {
+              if (mounted) {
+                setState(() {
+                  _totalPages = (pages != null && pages > 0)
+                      ? pages
+                      : (widget.syncedTotalPages ?? _totalPages);
+                  _isPdfReady = true;
+                });
+                widget.onDiagnosticsUpdate?.call(
+                  renderError: null,
+                  bytesLoaded: _resolvedPdfPath != null ? File(_resolvedPdfPath!).lengthSync() : null,
+                );
+              }
+            },
+            onViewCreated: (PDFViewController controller) {
+              _pdfViewController = controller;
+              if (_currentPage > 0) {
+                controller.setPage(_currentPage);
+              }
+            },
+            onPageChanged: (page, total) {
+              if (page != null && page != _currentPage) {
+                if (mounted) {
+                  setState(() {
+                    _currentPage = page;
+                    if (total != null && total > 0) _totalPages = total;
+                  });
+                }
+                if (widget.isTeacher) {
+                  widget.onPageChanged?.call(page + 1);
+                }
+              }
+            },
+            onError: (error) {
+              debugPrint('[PDFView] Error: $error');
+              widget.onDiagnosticsUpdate?.call(renderError: error.toString());
+              if (mounted) {
+                setState(() => _errorMessage = 'Slides load nahi ho payi');
+              }
+            },
+            onPageError: (page, error) {
+              debugPrint('[PDFView] Page $page error: $error');
+              widget.onDiagnosticsUpdate?.call(renderError: 'Page $page: $error');
+            },
+          ),
+          if (!_isPdfReady)
+            Container(
+              color: AppColors.slate900,
+              child: const Center(
+                child: CircularProgressIndicator(color: AppColors.indigo400),
+              ),
+            ),
+        ],
+      );
+    }
+
+    // No PDF loaded yet
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.slate800,
+                shape: BoxShape.circle,
+                border: Border.all(color: AppColors.slate700),
+              ),
+              child: const Icon(
+                Icons.picture_as_pdf_rounded,
+                color: AppColors.indigo400,
+                size: 48,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              widget.isTeacher ? 'Koi PDF select nahi hai' : 'Waiting for Teacher\'s Slides',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              widget.isTeacher
+                  ? 'Apne device se PDF presentation chunein aur live class me padhayein'
+                  : 'Teacher jab PDF present karenge, yahan real PDF pages display ho jayenge',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.slate400, fontSize: 12),
+            ),
+            const SizedBox(height: 20),
+            if (widget.isTeacher)
+              ElevatedButton.icon(
+                onPressed: _pickLocalDocument,
+                icon: const Icon(Icons.upload_file_rounded),
+                label: const Text('Select PDF Document'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.indigo600,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

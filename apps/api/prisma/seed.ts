@@ -4,32 +4,46 @@ import argon2 from 'argon2';
 const prisma = new PrismaClient();
 
 async function resetDemo() {
-  // 3.1 Guard against running in production
-  if (process.env.NODE_ENV === 'production') {
-    const isOverrideAllowed =
-      process.env.ALLOW_DESTRUCTIVE_DEMO_RESET === 'true' ||
-      process.env.FORCE_DEMO_RESET === 'true';
+  const isProduction = process.env.NODE_ENV === 'production';
+  const allowDestructive = process.env.ALLOW_DESTRUCTIVE_DEMO_RESET === 'true';
+  const allowDemoUsers = process.env.ALLOW_DEMO_USERS === 'true';
 
-    if (!isOverrideAllowed) {
-      const instituteCount = await prisma.institute.count().catch(() => 0);
-      if (instituteCount > 0) {
-        console.log('ℹ️ Production environment detected: Database already contains data. Skipping demo reset to protect data.');
-        return;
-      }
-      console.log('🌱 Production initial deploy: Database is empty. Seeding baseline demo data...');
-    } else {
-      // If override is enabled, verify there are no real customer users
-      const nonDemoUserCount = await prisma.user.count({
-        where: {
-          email: { not: { endsWith: '@apex.edu' } },
-        },
-      }).catch(() => 0);
+  // Item 9 Guard: FORCE_DEMO_RESET is harmless/ignored in production
+  if (isProduction && process.env.FORCE_DEMO_RESET === 'true') {
+    console.log('ℹ️ [Seed] FORCE_DEMO_RESET is ignored in production.');
+  }
 
-      if (nonDemoUserCount > 0) {
-        console.log(`ℹ️ Refusing to reset DB in production: Found ${nonDemoUserCount} real non-demo users. Skipping demo reset safely.`);
-        return;
-      }
+  // In production, demo users are created only if ALLOW_DEMO_USERS=true (default false)
+  if (isProduction && !allowDemoUsers) {
+    console.log('ℹ️ [Seed] Production environment detected and ALLOW_DEMO_USERS=true is not set. Skipping seed completely to protect database.');
+    return;
+  }
+
+  // Never allow destructive wipe in production under any circumstances
+  if (isProduction) {
+    console.log('ℹ️ [Seed] Production environment detected. Destructive table wipe is strictly blocked.');
+    return;
+  }
+
+  // In non-production, destructive table wipe requires ALLOW_DESTRUCTIVE_DEMO_RESET=true
+  if (!allowDestructive) {
+    const instituteCount = await prisma.institute.count().catch(() => 0);
+    if (instituteCount > 0) {
+      console.log('ℹ️ Database already contains data and ALLOW_DESTRUCTIVE_DEMO_RESET is not true. Skipping destructive wipe.');
+      return;
     }
+  }
+
+  // Verify database does not contain real customer accounts before any wipe
+  const nonDemoUserCount = await prisma.user.count({
+    where: {
+      email: { not: { endsWith: '@apex.edu' } },
+    },
+  }).catch(() => 0);
+
+  if (nonDemoUserCount > 0) {
+    console.log(`ℹ️ [Seed] Refusing to reset DB: Found ${nonDemoUserCount} real non-demo users. Skipping demo reset safely.`);
+    return;
   }
 
   console.log('🌱 Starting Classora 2.0 Demo Reset & Seeding (Clean Data Hygiene)...');

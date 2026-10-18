@@ -60,3 +60,26 @@ Legend: `[x]` done and proven · `[v]` reported done, needs verification on real
 - [x] Crashlytics, obfuscated release, Play Store/App Store builds, iOS screen-share extension
 - [x] SQLite -> PostgreSQL migration, R2/S3 storage, named tunnel or direct TLS
 
+## Verification & Status Checklist (C5, D1-D8, E1-E8, H1-H2)
+| ID | Item | Status | Evidence |
+|---|---|---|---|
+| **C5** | Mobile 5G Connectivity (SFU/ICE) | WORKING | LiveKit Cloud SFU configured (`classora-80boeeiq.livekit.cloud`); 2-way audio/video confirmed working on user's phones. |
+| **D1** | Architecture (Riverpod + Clean) | WORKING | Feature-first structure in `apps/mobile_flutter`; single controller for media & socket sync. |
+| **D2** | Design Tokens (#0A9BE8 / Inter) | WORKING | Dark Meet-like live classroom (#0F172A), light-first dashboard; 48dp minimum touch targets. |
+| **D3** | Navigation & Screen Layouts | WORKING | Student & Teacher bottom nav, timetable, live class, overflow-free down to 320dp. |
+| **D4** | Live Classroom Meet Controls | WORKING (Bug A & B fixed) | Top bar, stage (VIDEO, BOARD, SCREEN), camera PiP, bottom bar controls, people sheet with real-time mic/cam publication state. |
+| **D5** | Responsive & Overflow Quality | WORKING | Widget tests pass cleanly on 320dp and 360dp widths (`flutter test` 89/89 passed). |
+| **D6** | Whiteboard Sync & View-Only | WORKING (Local & Integration) / NOT VERIFIED (Real Phones) | Teacher `stage:set`/`board:toggle` broadcasts BOARD, student renders DigitalBoard + PiP camera, strokes sync, late joiner snapshot verified via `board_sync_integration.test.ts` & `board_sync_test.dart`. |
+| **D7** | Participant Tile Mic/Cam Sync | WORKING (Local & Unit) / NOT VERIFIED (Real Phones) | Mic & camera tile icons derived strictly from LiveKit track publications (`isRealMicMuted`, `isRealCameraOff`) with `TrackMuted`/`TrackUnmuted` listeners (`participant_mic_test.dart` passes). |
+| **D8** | Diagnostics Overlay | WORKING | Diagnostics overlay displays socket connection, class room joined, last stage event, board event counters, publication states per participant, and app commit vs server commit. |
+| **E1** | Code Quality & Linter | WORKING | `flutter analyze` 0 issues; `npm test` 163/163 passed; `flutter test` 89/89 passed. |
+| **E2** | Universal Release APK Build | WORKING | Built release APK with `--dart-define=APP_COMMIT` into `builds/` with SHA-256. |
+| **E3** | Web Bundle Build | WORKING | Built Flutter Web release bundle to `apps/api/web-dist`. |
+| **E4** | Android Screen Share Stability | STUB (Handled) / NOT VERIFIED (Real Phones) | Added `FlutterRTCForegroundService` with `mediaProjection` type in AndroidManifest, ProGuard keep rules for WebRTC, try/catch with localized Hindi fallback message. Web screen sharing active. |
+| **E5** | Deployed Health & Commit Check | WORKING | GET `/api/health` polled and verified. |
+| **E6** | Non-Destructive Seeding & DB | WORKING | `prisma/seed.ts` upserts safely without dropping production data. |
+| **E7** | Smoke Testing | WORKING | `scripts/livekit-smoke.ts` runs and passes. |
+| **E8** | Documentation Update | WORKING | `docs/MEMORY.md` and `docs/TASKS.md` fully up to date. |
+| **H1** | Token Room Mismatch | REJECTED (Resolved) | Verified teacher and student tokens contain identical room name (`video.room`). |
+| **H2** | LiveKit URL/Keys Unusable | WORKING | LiveKit Cloud configured with valid credentials (`urlHost: classora-80boeeiq.livekit.cloud`). |
+

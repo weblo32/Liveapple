@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+export 'slide_deck_model.dart';
 
 class UserSession {
   final String id;

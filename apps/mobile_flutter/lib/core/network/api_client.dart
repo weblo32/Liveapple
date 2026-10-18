@@ -8,12 +8,22 @@ import 'endpoints.dart';
 final apiClientProvider = Provider<ApiClient>((ref) => ApiClient());
 
 class ApiClient {
+  static ApiClient? _instance;
+  static ApiClient get instance => _instance ??= ApiClient._internal();
+
   final Dio dio;
   final SecureStorageService storage;
   bool _isRefreshing = false;
   static bool _hasSyncedRemoteConfig = false;
 
-  ApiClient({Dio? dioClient, SecureStorageService? storageService})
+  factory ApiClient({Dio? dioClient, SecureStorageService? storageService}) {
+    if (dioClient != null || storageService != null) {
+      return ApiClient._internal(dioClient: dioClient, storageService: storageService);
+    }
+    return _instance ??= ApiClient._internal();
+  }
+
+  ApiClient._internal({Dio? dioClient, SecureStorageService? storageService})
       : dio = dioClient ?? Dio(),
         storage = storageService ?? SecureStorageService() {
     dio.options.baseUrl = Endpoints.defaultBaseUrl;
@@ -178,6 +188,17 @@ class ApiClient {
 
   /// Reset sync flag (for testing or manual force-refresh)
   static void resetSyncFlag() {
+    _hasSyncedRemoteConfig = false;
+  }
+
+  /// Mark synced (for testing or manual override)
+  static void markRemoteConfigSynced() {
+    _hasSyncedRemoteConfig = true;
+  }
+
+  /// Reset singleton instance (for testing)
+  static void resetForTesting() {
+    _instance = null;
     _hasSyncedRemoteConfig = false;
   }
 }

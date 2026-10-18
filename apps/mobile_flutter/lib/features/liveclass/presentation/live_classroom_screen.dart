@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:livekit_client/livekit_client.dart' as lk;
@@ -14,6 +17,9 @@ import '../../../screens/classroom/components/digital_board.dart';
 import '../../../screens/classroom/components/document_viewer.dart';
 import '../../../core/services/pip_service.dart';
 
+const bool kEnableAndroidScreenShare = bool.fromEnvironment('ENABLE_ANDROID_SCREEN_SHARE', defaultValue: false);
+const String kAppCommit = String.fromEnvironment('APP_COMMIT', defaultValue: 'unknown');
+
 class LiveClassroomScreen extends ConsumerStatefulWidget {
   final String classId;
 
@@ -25,6 +31,10 @@ class LiveClassroomScreen extends ConsumerStatefulWidget {
 
 class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
   final _chatTextController = TextEditingController();
+
+  // Desktop Responsive State (Section 5)
+  int _desktopSidebarTab = 0; // 0: Chat, 1: People, 2: Hands, 3: Polls, 4: Doubts
+  bool _showDesktopSidebar = true;
 
   // Green Room / Pre-Join Lobby State (Zoom & Meet style)
   bool _isInLobby = true;
@@ -602,6 +612,13 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
                                         onSelected: (action) {
                                           if (action == 'remove') {
                                             ref.read(liveClassRoomProvider.notifier).removeParticipant(p.identity);
+                                            _showToast(context, 'Removed ${p.name} from class');
+                                          } else if (action == 'muteMic') {
+                                            ref.read(liveClassRoomProvider.notifier).muteStudentMic(p.identity);
+                                            _showToast(context, 'Muted mic for ${p.name}');
+                                          } else if (action == 'stopCam') {
+                                            ref.read(liveClassRoomProvider.notifier).stopStudentCamera(p.identity);
+                                            _showToast(context, 'Stopped camera for ${p.name}');
                                           } else if (action == 'allowSpeak') {
                                             ref.read(liveClassRoomProvider.notifier).allowStudentToSpeak(p.identity);
                                             _showToast(context, 'Granted speaking rights to ${p.name}');
@@ -617,6 +634,14 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
                                           const PopupMenuItem(
                                             value: 'allowSpeak',
                                             child: Text('Allow Mic / Unmute', style: TextStyle(color: Colors.white, fontSize: 12)),
+                                          ),
+                                          const PopupMenuItem(
+                                            value: 'muteMic',
+                                            child: Text('Mute Microphone', style: TextStyle(color: Colors.white, fontSize: 12)),
+                                          ),
+                                          const PopupMenuItem(
+                                            value: 'stopCam',
+                                            child: Text('Stop Camera', style: TextStyle(color: Colors.white, fontSize: 12)),
                                           ),
                                           const PopupMenuItem(
                                             value: 'grantBoard',
@@ -714,29 +739,32 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
                   ref.read(liveClassRoomProvider.notifier).toggleWhiteboard();
                 },
               ),
-              ListTile(
-                leading: Icon(
-                  roomState.isScreenSharing ? Icons.stop_screen_share : Icons.screen_share,
-                  color: roomState.isScreenSharing ? AppColors.skyBlue : Colors.white,
-                ),
-                title: Text(
-                  roomState.isScreenSharing ? 'Stop Screen Share' : 'Share Screen',
-                  style: TextStyle(
+              if (kIsWeb || (defaultTargetPlatform == TargetPlatform.android && kEnableAndroidScreenShare))
+                ListTile(
+                  leading: Icon(
+                    roomState.isScreenSharing ? Icons.stop_screen_share : Icons.screen_share,
                     color: roomState.isScreenSharing ? AppColors.skyBlue : Colors.white,
-                    fontWeight: FontWeight.w600,
                   ),
+                  title: Text(
+                    roomState.isScreenSharing ? 'Stop Screen Share' : 'Share Screen',
+                    style: TextStyle(
+                      color: roomState.isScreenSharing ? AppColors.skyBlue : Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    roomState.isScreenSharing
+                        ? 'Currently sharing your screen with class'
+                        : 'Broadcast your screen to all students',
+                    style: const TextStyle(color: AppColors.slate400, fontSize: 11),
+                  ),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    ref.read(liveClassRoomProvider.notifier).toggleScreenShare(
+                          onError: (msg) => _showToast(context, msg),
+                        );
+                  },
                 ),
-                subtitle: Text(
-                  roomState.isScreenSharing
-                      ? 'Currently sharing your screen with class'
-                      : 'Broadcast your phone screen or browser window to all students',
-                  style: const TextStyle(color: AppColors.slate400, fontSize: 11),
-                ),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  ref.read(liveClassRoomProvider.notifier).toggleScreenShare();
-                },
-              ),
               ListTile(
                 leading: Icon(
                   roomState.isDocPresenting ? Icons.slideshow : Icons.picture_as_pdf_outlined,
@@ -751,18 +779,17 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
                 ),
                 subtitle: Text(
                   roomState.isDocPresenting
-                      ? 'Currently presenting Physics_Chapter_4_Wave_Optics.pdf'
+                      ? 'Currently presenting ${roomState.docTitle.isNotEmpty ? roomState.docTitle : 'Slides'}'
                       : 'Present lecture notes and synchronized PDF slides',
                   style: const TextStyle(color: AppColors.slate400, fontSize: 11),
                 ),
-                onTap: () {
+                onTap: () async {
                   Navigator.pop(ctx);
-                  final next = !roomState.isDocPresenting;
-                  ref.read(liveClassRoomProvider.notifier).setDocPresentation(
-                    isOpen: next,
-                    title: next ? 'Physics_Chapter_4_Wave_Optics.pdf' : '',
-                    page: 1,
-                  );
+                  if (roomState.isDocPresenting) {
+                    ref.read(liveClassRoomProvider.notifier).setDocPresentation(isOpen: false);
+                  } else {
+                    await _pickAndPresentSlides();
+                  }
                 },
               ),
               const SizedBox(height: 8),
@@ -773,7 +800,50 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
     );
   }
 
+  Future<void> _pickAndPresentSlides() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'ppt', 'pptx'],
+      );
+      if (result != null && result.files.isNotEmpty) {
+        final file = result.files.first;
+        final nameLower = file.name.toLowerCase();
+        if (nameLower.endsWith('.ppt') || nameLower.endsWith('.pptx')) {
+          if (!mounted) return;
+          _showToast(context, 'PPT ko PDF me export karo ya screen share karo');
+          return;
+        }
+
+        if (file.path != null) {
+          await ref.read(liveClassRoomProvider.notifier).uploadAndPresentSlides(
+                fileName: file.name,
+                filePath: file.path,
+                fileBytes: file.bytes,
+                onError: (msg) {
+                  if (mounted) _showToast(context, msg);
+                },
+              );
+        } else {
+          ref.read(liveClassRoomProvider.notifier).setDocPresentation(
+                isOpen: true,
+                title: file.name,
+                page: 1,
+              );
+        }
+      }
+    } catch (e) {
+      debugPrint('[SLIDES] File picker note: $e');
+    }
+  }
+
   void _showDebugOverlay(BuildContext context, LiveClassRoomState roomState) {
+    const appCommit = String.fromEnvironment('APP_COMMIT', defaultValue: 'dev');
+    final isCommitMismatch = appCommit != 'dev' &&
+        roomState.serverBuildCommit != null &&
+        roomState.serverBuildCommit != 'Unknown' &&
+        appCommit != roomState.serverBuildCommit;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF0F172A),
@@ -785,7 +855,7 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
         return Container(
           padding: const EdgeInsets.all(20),
           constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.75,
+            maxHeight: MediaQuery.of(context).size.height * 0.85,
           ),
           child: SingleChildScrollView(
             child: Column(
@@ -805,18 +875,104 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
                   ],
                 ),
                 const Divider(color: Color(0xFF334155)),
+                if (isCommitMismatch)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.error.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: AppColors.error),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'WARNING: App build ($appCommit) differs from server commit (${roomState.serverBuildCommit})',
+                            style: const TextStyle(color: AppColors.error, fontSize: 11, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                _buildDebugRow('App Build ID (Git SHA)', appCommit),
                 _buildDebugRow('Server Commit', roomState.serverBuildCommit ?? 'Unknown / Local'),
                 _buildDebugRow('Server Built At', roomState.serverBuildTime ?? 'Unknown'),
+                _buildDebugRow('Socket Connected', roomState.isSocketConnected ? 'YES' : 'NO'),
+                _buildDebugRow('Class Room Joined', roomState.isRoomJoined ? 'YES' : 'NO'),
+                _buildDebugRow('Snapshot Received', roomState.snapshotReceived ? 'YES' : 'NO'),
                 _buildDebugRow('Class ID', roomState.liveClass?.id ?? widget.classId),
                 _buildDebugRow('Role / Host', roomState.isHost ? 'TEACHER (Host)' : 'STUDENT'),
                 _buildDebugRow('Connection State', roomState.connectionState),
                 _buildDebugRow('Current Stage', roomState.stage),
+                _buildDebugRow('Last Stage Event Sent', roomState.lastStageEventSent ?? 'None'),
+                _buildDebugRow('Last Stage Event Received', roomState.lastStageEventReceived ?? 'None'),
+                _buildDebugRow('Board Events (Sent / Received)', '${roomState.boardEventsSent} sent / ${roomState.boardEventsReceived} received'),
                 _buildDebugRow('Mic Locked by Host', roomState.isMicLocked ? 'YES' : 'NO'),
                 _buildDebugRow('Participants Count', '${roomState.participants.length}'),
                 _buildDebugRow('Video Tracks Count', '${roomState.remoteVideoTracks.length}'),
                 _buildDebugRow('Token Grants', '${roomState.tokenGrants ?? "None"}'),
                 if (roomState.lastLiveKitError != null)
                   _buildDebugRow('Last LiveKit Error', roomState.lastLiveKitError!, isError: true),
+                const SizedBox(height: 12),
+                const Text(
+                  'Slides Presentation Diagnostics:',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+                const SizedBox(height: 6),
+                _buildDebugRow('Deck ID', roomState.slidesDeckId ?? (roomState.docUrl != null ? 'Active' : 'None')),
+                _buildDebugRow('Deck Title', roomState.docTitle.isNotEmpty ? roomState.docTitle : 'None'),
+                _buildDebugRow('Total Pages', '${roomState.docTotalPages}'),
+                _buildDebugRow('Current Page', '${roomState.docPage}'),
+                _buildDebugRow('Received Via', roomState.slidesReceiveSource ?? (roomState.snapshotReceived ? 'snapshot' : 'event')),
+                _buildDebugRow('Fetch Status', roomState.slidesFetchStatus ?? (roomState.docUrl != null ? '200 OK' : 'Idle')),
+                _buildDebugRow('Bytes / Pages Loaded', roomState.slidesBytesLoaded != null ? '${roomState.slidesBytesLoaded} bytes' : '${roomState.docPage} / ${roomState.docTotalPages} pages'),
+                _buildDebugRow('Render Error', roomState.slidesRenderError ?? 'None', isError: roomState.slidesRenderError != null),
+                _buildDebugRow('Server Commit', roomState.serverBuildCommit ?? 'Unknown / Local'),
+                const SizedBox(height: 12),
+                const Text(
+                  'Remote Participants Media Details:',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+                const SizedBox(height: 6),
+                ...roomState.participants.where((p) => !p.isLocal).map((p) => Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF334155)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${p.name} (${p.identity}) • ${p.role}',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Mic Pub: present=${p.micPubPresent}, muted=${p.micPubMuted}, sub=${p.micPubSubscribed} (Effective: ${p.isRealMicMuted ? "MUTED" : "UNMUTED"})',
+                        style: TextStyle(
+                          color: p.isRealMicMuted ? AppColors.error : AppColors.success,
+                          fontSize: 10,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Cam Pub: present=${p.camPubPresent}, muted=${p.camPubMuted}, sub=${p.camPubSubscribed} (Effective: ${p.isRealCameraOff ? "OFF" : "ON"})',
+                        style: TextStyle(
+                          color: p.isRealCameraOff ? AppColors.error : AppColors.success,
+                          fontSize: 10,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
                 const SizedBox(height: 12),
               ],
             ),
@@ -1014,6 +1170,29 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
                 ),
               ],
               ListTile(
+                leading: const Icon(Icons.chat_bubble_outline, color: AppColors.primaryLight),
+                title: Text(
+                  roomState.unreadChatCount > 0
+                      ? 'Live Chat (${roomState.unreadChatCount} new)'
+                      : 'Live Chat',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                ),
+                subtitle: const Text('View and send messages to classroom', style: TextStyle(color: AppColors.slate400, fontSize: 11)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showChatDrawer();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.people_outline, color: AppColors.primaryLight),
+                title: Text('Participants (${roomState.participants.length})', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                subtitle: const Text('View everyone currently in class', style: TextStyle(color: AppColors.slate400, fontSize: 11)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showParticipantsDrawer();
+                },
+              ),
+              ListTile(
                 key: const Key('enter_pip_menu_tile'),
                 leading: const Icon(Icons.picture_in_picture_alt, color: AppColors.skyBlue),
                 title: const Text('Picture-in-Picture', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
@@ -1168,63 +1347,192 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
       );
     }
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF0F172A),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Top Bar
-            _buildTopBar(liveClass, roomState),
+    final isDesktop = MediaQuery.of(context).size.width >= 900;
 
-            // Reconnection Alert Banner (Design Spec: Section 6)
-            if (roomState.connectionState == 'reconnecting') _buildReconnectBanner(),
-
-            // Main Stage Area (Whiteboard, Document Viewer, or Meet-like Video Stage)
-            Expanded(
-              child: roomState.isWhiteboardOpen
-                  ? Stack(
-                      children: [
-                        Positioned.fill(
-                          child: DigitalBoard(
-                            isTeacher: roomState.isHost || roomState.isBoardAllowed,
-                            onDrawStroke: (stroke) => ref.read(liveClassRoomProvider.notifier).sendDrawStroke(stroke),
-                            onClearBoard: () => ref.read(liveClassRoomProvider.notifier).sendClearBoard(),
-                            remoteDrawStream: ref.read(liveClassRoomProvider.notifier).remoteDrawStream,
-                            remoteClearStream: ref.read(liveClassRoomProvider.notifier).remoteClearStream,
-                          ),
-                        ),
-                        // Teacher camera PiP overlay over board (Stage 1.3)
-                        Positioned(
-                          top: 10,
-                          right: 10,
-                          width: 100,
-                          height: 125,
-                          child: _buildTeacherPip(roomState),
-                        ),
-                      ],
-                    )
-                  : (roomState.isDocPresenting
-                      ? DocumentViewer(
-                          isTeacher: roomState.isHost,
-                          syncedPage: roomState.docPage,
-                          onClose: roomState.isHost
-                              ? () => ref.read(liveClassRoomProvider.notifier).setDocPresentation(isOpen: false)
-                              : null,
-                          onPageChanged: roomState.isHost
-                              ? (page) => ref.read(liveClassRoomProvider.notifier).setDocPresentation(
-                                    isOpen: true,
-                                    title: roomState.docTitle,
-                                    page: page,
-                                  )
-                              : null,
+    final stageWidget = (roomState.stage == 'BOARD' || roomState.isWhiteboardOpen)
+        ? Stack(
+            children: [
+              Positioned.fill(
+                child: DigitalBoard(
+                  isTeacher: roomState.isHost || roomState.isBoardAllowed,
+                  onDrawStroke: (stroke) => ref.read(liveClassRoomProvider.notifier).sendDrawStroke(stroke),
+                  onClearBoard: () => ref.read(liveClassRoomProvider.notifier).sendClearBoard(),
+                  remoteDrawStream: ref.read(liveClassRoomProvider.notifier).remoteDrawStream,
+                  remoteClearStream: ref.read(liveClassRoomProvider.notifier).remoteClearStream,
+                ),
+              ),
+              // Teacher camera PiP overlay over board (Stage 1.3)
+              Positioned(
+                top: 10,
+                right: 10,
+                width: 100,
+                height: 125,
+                child: _buildTeacherPip(roomState),
+              ),
+            ],
+          )
+        : ((roomState.stage == 'SLIDES' || roomState.isDocPresenting)
+            ? DocumentViewer(
+                isTeacher: roomState.isHost,
+                syncedPage: roomState.docPage,
+                syncedTotalPages: roomState.docTotalPages,
+                docTitle: roomState.docTitle,
+                docPath: roomState.docPath,
+                docUrl: roomState.docUrl,
+                isSharedWithStudents: roomState.isSharedWithStudents,
+                isUploading: roomState.isSlidesUploading,
+                uploadProgress: roomState.slidesUploadProgress,
+                onDiagnosticsUpdate: ({fetchStatus, bytesLoaded, renderError}) {
+                  ref.read(liveClassRoomProvider.notifier).updateSlidesDiagnostics(
+                        fetchStatus: fetchStatus,
+                        bytesLoaded: bytesLoaded,
+                        renderError: renderError,
+                      );
+                },
+                onClose: roomState.isHost
+                    ? () => ref.read(liveClassRoomProvider.notifier).setDocPresentation(isOpen: false)
+                    : null,
+                onPageChanged: roomState.isHost
+                    ? (page) => ref.read(liveClassRoomProvider.notifier).setDocPage(page)
+                    : null,
+                onLocalFileSelected: roomState.isHost
+                    ? (path, name) => ref.read(liveClassRoomProvider.notifier).uploadAndPresentSlides(
+                          fileName: name,
+                          filePath: path,
+                          onError: (err) => _showToast(context, err),
+                          onSuccess: (msg) => _showToast(context, msg),
                         )
-                      : _buildVideoStage(roomState)),
-            ),
+                    : null,
+              )
+            : _buildVideoStage(roomState));
 
-            // Google Meet Style Bottom Controls Toolbar (8 Controls)
-            _buildControlsBar(roomState, userName),
-          ],
+    final mainColumn = Column(
+      children: [
+        // Top Bar
+        _buildTopBar(liveClass, roomState),
+
+        // Reconnection Alert Banner
+        if (roomState.connectionState == 'reconnecting') _buildReconnectBanner(),
+
+        // Student locked mic banner: "Teacher ne mic band kiya hai" + Raise Hand
+        if (!roomState.isHost && roomState.isMicLocked)
+          _buildMicLockedBanner(userName, roomState),
+
+        // Main Stage Area
+        Expanded(child: stageWidget),
+
+        // Bottom Controls Toolbar (centered, 320dp responsive)
+        _buildControlsBar(roomState, userName, isDesktop: isDesktop),
+      ],
+    );
+
+    // Desktop & Web Keyboard Shortcuts (M, V, S, B, C, Left, Right)
+    final shortcuts = <ShortcutActivator, VoidCallback>{
+      const SingleActivator(LogicalKeyboardKey.keyM): () {
+        if (!roomState.isHost && roomState.isMicLocked) {
+          _showToast(context, 'Teacher ne mic band kiya hai. Raise Hand to speak.');
+          return;
+        }
+        ref.read(liveClassRoomProvider.notifier).toggleMic();
+      },
+      const SingleActivator(LogicalKeyboardKey.keyV): () {
+        ref.read(liveClassRoomProvider.notifier).toggleCamera();
+      },
+      const SingleActivator(LogicalKeyboardKey.keyS): () {
+        if (roomState.isHost) {
+          ref.read(liveClassRoomProvider.notifier).toggleScreenShare(
+                onError: (msg) => _showToast(context, msg),
+              );
+        }
+      },
+      const SingleActivator(LogicalKeyboardKey.keyB): () {
+        if (roomState.isHost || roomState.isBoardAllowed) {
+          ref.read(liveClassRoomProvider.notifier).toggleWhiteboard();
+        }
+      },
+      const SingleActivator(LogicalKeyboardKey.keyC): () {
+        if (isDesktop) {
+          setState(() {
+            _showDesktopSidebar = !_showDesktopSidebar;
+            _desktopSidebarTab = 0;
+          });
+        } else {
+          _showChatDrawer();
+        }
+      },
+      const SingleActivator(LogicalKeyboardKey.arrowLeft): () {
+        if (roomState.isHost && (roomState.stage == 'SLIDES' || roomState.isDocPresenting)) {
+          if (roomState.docPage > 1) {
+            ref.read(liveClassRoomProvider.notifier).setDocPresentation(
+                  isOpen: true,
+                  title: roomState.docTitle,
+                  page: roomState.docPage - 1,
+                );
+          }
+        }
+      },
+      const SingleActivator(LogicalKeyboardKey.arrowRight): () {
+        if (roomState.isHost && (roomState.stage == 'SLIDES' || roomState.isDocPresenting)) {
+          ref.read(liveClassRoomProvider.notifier).setDocPresentation(
+                isOpen: true,
+                title: roomState.docTitle,
+                page: roomState.docPage + 1,
+              );
+        }
+      },
+    };
+
+    return CallbackShortcuts(
+      bindings: shortcuts,
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          backgroundColor: const Color(0xFF0F172A),
+          body: SafeArea(
+            child: isDesktop
+                ? Row(
+                    children: [
+                      Expanded(
+                        flex: 7,
+                        child: mainColumn,
+                      ),
+                      if (_showDesktopSidebar)
+                        _buildDesktopSidebar(roomState, user, userName),
+                    ],
+                  )
+                : mainColumn,
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildMicLockedBanner(String userName, LiveClassRoomState roomState) {
+    return Container(
+      width: double.infinity,
+      color: AppColors.error.withValues(alpha: 0.9),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          const Icon(Icons.mic_off, color: Colors.white, size: 16),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'Teacher ne mic band kiya hai',
+              style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+            ),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => ref.read(liveClassRoomProvider.notifier).toggleHandRaise(userName),
+            icon: Icon(roomState.isHandRaised ? Icons.pan_tool : Icons.pan_tool_outlined, size: 14),
+            label: Text(roomState.isHandRaised ? 'Hand Raised' : 'Raise Hand', style: const TextStyle(fontSize: 11)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.black87,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1653,13 +1961,13 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Icon(
-                                heroParticipant.isMicMuted ? Icons.mic_off : Icons.graphic_eq,
-                                color: heroParticipant.isMicMuted ? AppColors.error : AppColors.primaryLight,
+                                heroParticipant.isRealMicMuted ? Icons.mic_off : Icons.graphic_eq,
+                                color: heroParticipant.isRealMicMuted ? AppColors.error : AppColors.primaryLight,
                                 size: 14,
                               ),
                               const SizedBox(width: 4),
                               Text(
-                                heroParticipant.isMicMuted ? 'Microphone Muted' : (heroParticipant.isHost ? 'Speaking (Host)' : 'Speaking'),
+                                heroParticipant.isRealMicMuted ? 'Microphone Muted' : (heroParticipant.isHost ? 'Speaking (Host)' : 'Speaking'),
                                 style: const TextStyle(color: AppColors.slate400, fontSize: 11),
                               ),
                             ],
@@ -1682,8 +1990,8 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(
-                            heroParticipant.isMicMuted ? Icons.mic_off : Icons.mic,
-                            color: heroParticipant.isMicMuted ? AppColors.error : AppColors.success,
+                            heroParticipant.isRealMicMuted ? Icons.mic_off : Icons.mic,
+                            color: heroParticipant.isRealMicMuted ? AppColors.error : AppColors.success,
                             size: 14,
                           ),
                           const SizedBox(width: 4),
@@ -1804,8 +2112,8 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
                     ),
                   ),
                   Icon(
-                    p.isMicMuted ? Icons.mic_off : Icons.mic,
-                    color: p.isMicMuted ? AppColors.error : AppColors.success,
+                    p.isRealMicMuted ? Icons.mic_off : Icons.mic,
+                    color: p.isRealMicMuted ? AppColors.error : AppColors.success,
                     size: 11,
                   ),
                 ],
@@ -1817,122 +2125,169 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
     );
   }
 
-  // Google Meet Style Bottom Bar (7 Controls for Teacher, 7 Controls for Student)
-  Widget _buildControlsBar(LiveClassRoomState roomState, String userName) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: const BoxDecoration(
-        color: Color(0xFF1E293B),
-        border: Border(top: BorderSide(color: Color(0xFF334155), width: 1)),
-      ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.start,
+  // Google Meet Style Bottom Bar (Priority ordered, fits 320-430dp without clipping or overflow)
+  Widget _buildControlsBar(LiveClassRoomState roomState, String userName, {bool isDesktop = false}) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.maxWidth;
+        final textScale = MediaQuery.textScalerOf(context).scale(1.0);
+        // Compact if screen is narrow (< 390dp) or large text scale (> 1.15)
+        final isCompact = availableWidth < 390 || textScale > 1.15;
+
+        Widget buildMicBtn() => _buildControlButton(
+          icon: roomState.isMicMuted ? Icons.mic_off : Icons.mic,
+          label: 'Mic',
+          isActive: !roomState.isMicMuted,
+          color: roomState.isMicMuted ? AppColors.error : Colors.white,
+          backgroundColor: roomState.isMicMuted ? const Color(0xFF334155) : AppColors.primary,
+          onTap: () {
+            if (!roomState.isHost && roomState.isMicLocked) {
+              _showToast(context, 'Teacher ne mic band kiya hai. Raise Hand to speak.');
+              return;
+            }
+            ref.read(liveClassRoomProvider.notifier).toggleMic();
+          },
+        );
+
+        Widget buildCamBtn() => _buildControlButton(
+          icon: roomState.isCameraOff ? Icons.videocam_off : Icons.videocam,
+          label: 'Video',
+          isActive: !roomState.isCameraOff,
+          color: roomState.isCameraOff ? AppColors.error : Colors.white,
+          backgroundColor: roomState.isCameraOff ? const Color(0xFF334155) : AppColors.primary,
+          onTap: () => ref.read(liveClassRoomProvider.notifier).toggleCamera(),
+        );
+
+        final isPresenting = roomState.isWhiteboardOpen || roomState.isScreenSharing || roomState.isDocPresenting;
+        Widget buildPresentBtn() => _buildControlButton(
+          icon: Icons.present_to_all,
+          label: 'Present',
+          isActive: isPresenting,
+          color: isPresenting ? Colors.white : AppColors.slate100,
+          backgroundColor: isPresenting ? AppColors.primary : AppColors.slate800,
+          onTap: () => _showPresentMenu(context, roomState),
+        );
+
+        Widget buildHandBtn() => _buildControlButton(
+          icon: roomState.isHandRaised ? Icons.pan_tool : Icons.pan_tool_outlined,
+          label: 'Hand',
+          isActive: roomState.isHandRaised,
+          color: roomState.isHandRaised ? Colors.white : AppColors.slate100,
+          backgroundColor: roomState.isHandRaised ? AppColors.warning : AppColors.slate800,
+          onTap: () => ref.read(liveClassRoomProvider.notifier).toggleHandRaise(userName),
+        );
+
+        Widget buildChatBtn() => Stack(
+          clipBehavior: Clip.none,
           children: [
-            // 1. Mic Toggle
             _buildControlButton(
-              icon: roomState.isMicMuted ? Icons.mic_off : Icons.mic,
-              label: roomState.isMicMuted ? 'Unmute' : 'Mute',
-              isActive: !roomState.isMicMuted,
-              color: roomState.isMicMuted ? AppColors.error : AppColors.slate100,
+              icon: Icons.chat_bubble_outline,
+              label: 'Chat',
+              isActive: isDesktop && _showDesktopSidebar && _desktopSidebarTab == 0,
+              color: (isDesktop && _showDesktopSidebar && _desktopSidebarTab == 0) ? Colors.white : AppColors.slate100,
+              backgroundColor: (isDesktop && _showDesktopSidebar && _desktopSidebarTab == 0)
+                  ? AppColors.primary
+                  : AppColors.slate800,
               onTap: () {
-                if (!roomState.isHost && roomState.isMicLocked) {
-                  _showToast(context, 'The host has locked student microphones. Raise hand to speak.');
-                  return;
+                if (isDesktop) {
+                  setState(() {
+                    _showDesktopSidebar = true;
+                    _desktopSidebarTab = 0;
+                  });
+                } else {
+                  _showChatDrawer();
                 }
-                ref.read(liveClassRoomProvider.notifier).toggleMic();
               },
             ),
-
-            // 2. Camera Toggle
-            _buildControlButton(
-              icon: roomState.isCameraOff ? Icons.videocam_off : Icons.videocam,
-              label: roomState.isCameraOff ? 'Start Video' : 'Stop Video',
-              isActive: !roomState.isCameraOff,
-              color: roomState.isCameraOff ? AppColors.error : AppColors.slate100,
-              onTap: () => ref.read(liveClassRoomProvider.notifier).toggleCamera(),
-            ),
-
-            // 3. Present (Teacher) or Raise Hand (Student)
-            if (roomState.isHost)
-              _buildControlButton(
-                icon: Icons.present_to_all,
-                label: 'Present',
-                isActive: roomState.isWhiteboardOpen || roomState.isScreenSharing || roomState.isDocPresenting,
-                color: (roomState.isWhiteboardOpen || roomState.isScreenSharing || roomState.isDocPresenting)
-                    ? AppColors.primary
-                    : AppColors.slate100,
-                onTap: () => _showPresentMenu(context, roomState),
-              )
-            else
-              _buildControlButton(
-                icon: roomState.isHandRaised ? Icons.pan_tool : Icons.pan_tool_outlined,
-                label: roomState.isHandRaised ? 'Lower Hand' : 'Raise Hand',
-                isActive: roomState.isHandRaised,
-                color: roomState.isHandRaised ? AppColors.warning : AppColors.slate100,
-                onTap: () => ref.read(liveClassRoomProvider.notifier).toggleHandRaise(userName),
-              ),
-
-            // 4. Chat Button with Unread Badge
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                _buildControlButton(
-                  icon: Icons.chat_bubble_outline,
-                  label: 'Chat',
-                  isActive: false,
-                  onTap: _showChatDrawer,
-                ),
-                if (roomState.unreadChatCount > 0)
-                  Positioned(
-                    top: 0,
-                    right: 6,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(
-                        color: AppColors.liveRed,
-                        shape: BoxShape.circle,
-                      ),
-                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                      child: Text(
-                        '${roomState.unreadChatCount}',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
-                      ),
-                    ),
+            if (roomState.unreadChatCount > 0)
+              Positioned(
+                top: 0,
+                right: 6,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: const BoxDecoration(
+                    color: AppColors.liveRed,
+                    shape: BoxShape.circle,
                   ),
-              ],
-            ),
-
-            // 5. Participants Sheet
-            _buildControlButton(
-              icon: Icons.people_outline,
-              label: 'People (${roomState.participants.length})',
-              isActive: false,
-              onTap: _showParticipantsDrawer,
-            ),
-
-            // 6. More Options
-            _buildControlButton(
-              icon: Icons.more_horiz,
-              label: 'More',
-              isActive: false,
-              onTap: () => _showMoreActionsSheet(roomState, userName),
-            ),
-
-            // 7. Call End / Leave button
-            _buildControlButton(
-              icon: Icons.call_end,
-              label: roomState.isHost ? 'End Class' : 'Leave',
-              isActive: true,
-              color: Colors.white,
-              backgroundColor: AppColors.liveRed,
-              onTap: () => _handleLeaveOrEnd(roomState.isHost),
-            ),
+                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                  child: Text(
+                    '${roomState.unreadChatCount}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
           ],
-        ),
-      ),
+        );
+
+        Widget buildPeopleBtn() => _buildControlButton(
+          icon: Icons.people_outline,
+          label: 'People',
+          isActive: isDesktop && _showDesktopSidebar && _desktopSidebarTab == 1,
+          color: (isDesktop && _showDesktopSidebar && _desktopSidebarTab == 1) ? Colors.white : AppColors.slate100,
+          backgroundColor: (isDesktop && _showDesktopSidebar && _desktopSidebarTab == 1)
+              ? AppColors.primary
+              : AppColors.slate800,
+          onTap: () {
+            if (isDesktop) {
+              setState(() {
+                _showDesktopSidebar = true;
+                _desktopSidebarTab = 1;
+              });
+            } else {
+              _showParticipantsDrawer();
+            }
+          },
+        );
+
+        Widget buildMoreBtn() => _buildControlButton(
+          icon: Icons.more_horiz,
+          label: 'More',
+          isActive: false,
+          color: AppColors.slate100,
+          backgroundColor: AppColors.slate800,
+          onTap: () => _showMoreActionsSheet(roomState, userName),
+        );
+
+        Widget buildEndLeaveBtn() => _buildControlButton(
+          icon: Icons.call_end,
+          label: roomState.isHost ? 'End' : 'Leave',
+          isActive: true,
+          color: Colors.white,
+          backgroundColor: AppColors.liveRed,
+          onTap: () => _handleLeaveOrEnd(roomState.isHost),
+        );
+
+        List<Widget> barItems;
+        if (roomState.isHost) {
+          if (isCompact) {
+            barItems = [buildMicBtn(), buildCamBtn(), buildPresentBtn(), buildMoreBtn(), buildEndLeaveBtn()];
+          } else {
+            barItems = [buildMicBtn(), buildCamBtn(), buildPresentBtn(), buildChatBtn(), buildPeopleBtn(), buildMoreBtn(), buildEndLeaveBtn()];
+          }
+        } else {
+          if (isCompact) {
+            barItems = [buildMicBtn(), buildCamBtn(), buildHandBtn(), buildMoreBtn(), buildEndLeaveBtn()];
+          } else {
+            barItems = [buildMicBtn(), buildCamBtn(), buildHandBtn(), buildChatBtn(), buildPeopleBtn(), buildMoreBtn(), buildEndLeaveBtn()];
+          }
+        }
+
+        return SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+            decoration: const BoxDecoration(
+              color: Color(0xFF1E293B),
+              border: Border(top: BorderSide(color: Color(0xFF334155), width: 1)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: barItems.map((item) => Expanded(child: Center(child: item))).toList(),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1944,28 +2299,33 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
     Color? backgroundColor,
     required VoidCallback onTap,
   }) {
+    final effectiveBg = backgroundColor ?? (isActive ? AppColors.primary : AppColors.slate800);
+    final effectiveIconColor = color ?? (isActive ? Colors.white : AppColors.slate100);
+
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(7),
               decoration: BoxDecoration(
-                color: backgroundColor ?? (isActive ? AppColors.primary : AppColors.slate800),
+                color: effectiveBg,
                 shape: BoxShape.circle,
               ),
-              child: Icon(icon, color: color ?? Colors.white, size: 18),
+              child: Icon(icon, color: effectiveIconColor, size: 18),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 3),
             Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: color ?? AppColors.slate400,
-                fontSize: 10,
+                color: effectiveIconColor == Colors.white ? AppColors.slate300 : effectiveIconColor,
+                fontSize: 10.5,
                 fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
               ),
             ),
@@ -1973,6 +2333,421 @@ class _LiveClassroomScreenState extends ConsumerState<LiveClassroomScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildDesktopSidebar(LiveClassRoomState roomState, dynamic user, String userName) {
+    return Container(
+      width: 360,
+      decoration: const BoxDecoration(
+        color: Color(0xFF1E293B),
+        border: Border(left: BorderSide(color: Color(0xFF334155), width: 1)),
+      ),
+      child: Column(
+        children: [
+          // Sidebar header tabs (Chat, People, Hands, Polls, Doubts)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            decoration: const BoxDecoration(
+              color: Color(0xFF0F172A),
+              border: Border(bottom: BorderSide(color: Color(0xFF334155), width: 1)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _buildSidebarTabBtn(0, Icons.chat_bubble_outline, 'Chat'),
+                _buildSidebarTabBtn(1, Icons.people_outline, 'People'),
+                _buildSidebarTabBtn(2, Icons.pan_tool_outlined, 'Hands'),
+                _buildSidebarTabBtn(3, Icons.poll_outlined, 'Polls'),
+                _buildSidebarTabBtn(4, Icons.help_outline, 'Doubts'),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _buildSidebarTabBody(roomState, user, userName),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidebarTabBtn(int index, IconData icon, String label) {
+    final isSelected = _desktopSidebarTab == index;
+    return InkWell(
+      onTap: () => setState(() => _desktopSidebarTab = index),
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.primary.withValues(alpha: 0.2) : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          border: isSelected ? Border.all(color: AppColors.primary, width: 1) : null,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: isSelected ? AppColors.primary : AppColors.slate400),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color: isSelected ? Colors.white : AppColors.slate400,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSidebarTabBody(LiveClassRoomState roomState, dynamic user, String userName) {
+    switch (_desktopSidebarTab) {
+      case 0:
+        return _buildDesktopChat(roomState, user, userName);
+      case 1:
+        return _buildDesktopPeople(roomState);
+      case 2:
+        return _buildDesktopHands(roomState);
+      case 3:
+        return _buildDesktopPolls(roomState);
+      case 4:
+        return _buildDesktopDoubts(roomState, user, userName);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildDesktopChat(LiveClassRoomState roomState, dynamic user, String userName) {
+    final userRole = user?.role ?? 'STUDENT';
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        children: [
+          Expanded(
+            child: roomState.chatMessages.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No messages yet. Ask doubt or message the class!',
+                      style: TextStyle(color: AppColors.slate400, fontSize: 12),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: roomState.chatMessages.length,
+                    itemBuilder: (context, idx) {
+                      final msg = roomState.chatMessages[idx];
+                      final isMe = msg.senderId == (user?.id ?? 'me');
+
+                      if (msg.isSystem) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Center(
+                            child: Text(
+                              msg.text,
+                              style: const TextStyle(
+                                fontStyle: FontStyle.italic,
+                                fontSize: 11,
+                                color: AppColors.slate400,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      return Align(
+                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          constraints: const BoxConstraints(maxWidth: 280),
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: isMe ? AppColors.primary : const Color(0xFF0F172A),
+                            borderRadius: BorderRadius.circular(10),
+                            border: isMe ? null : Border.all(color: const Color(0xFF334155)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    isMe ? 'You' : msg.senderName,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 11,
+                                      color: isMe ? Colors.white : AppColors.primaryLight,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      color: isMe ? Colors.white70 : AppColors.slate400,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                msg.text,
+                                style: const TextStyle(fontSize: 13, color: Colors.white),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _chatTextController,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: 'Type doubt or message...',
+                    hintStyle: const TextStyle(color: AppColors.slate400, fontSize: 12),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    filled: true,
+                    fillColor: const Color(0xFF0F172A),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: const BorderSide(color: Color(0xFF334155)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: const BorderSide(color: Color(0xFF334155)),
+                    ),
+                  ),
+                  onSubmitted: (val) {
+                    if (val.trim().isNotEmpty) {
+                      ref.read(liveClassRoomProvider.notifier).sendChatMessage(val, userName, userRole);
+                      _chatTextController.clear();
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 6),
+              IconButton.filled(
+                icon: const Icon(Icons.send, size: 16),
+                style: IconButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  padding: const EdgeInsets.all(10),
+                ),
+                onPressed: () {
+                  if (_chatTextController.text.trim().isNotEmpty) {
+                    ref.read(liveClassRoomProvider.notifier).sendChatMessage(_chatTextController.text, userName, userRole);
+                    _chatTextController.clear();
+                  }
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDesktopPeople(LiveClassRoomState roomState) {
+    final sorted = List<ClassParticipant>.from(roomState.participants)
+      ..sort((a, b) {
+        if (a.isHandRaised != b.isHandRaised) return a.isHandRaised ? -1 : 1;
+        if (a.isHost != b.isHost) return a.isHost ? -1 : 1;
+        if (a.isLocal != b.isLocal) return a.isLocal ? -1 : 1;
+        return a.name.compareTo(b.name);
+      });
+
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Participants (${sorted.length})',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
+              ),
+              if (roomState.isHost)
+                ElevatedButton.icon(
+                  onPressed: () {
+                    ref.read(liveClassRoomProvider.notifier).muteAll(lock: true);
+                    _showToast(context, 'All student microphones muted and locked');
+                  },
+                  icon: const Icon(Icons.mic_off, size: 12),
+                  label: const Text('Mute All', style: TextStyle(fontSize: 10)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.error,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  ),
+                ),
+            ],
+          ),
+          const Divider(color: Color(0xFF334155)),
+          Expanded(
+            child: ListView.builder(
+              itemCount: sorted.length,
+              itemBuilder: (context, idx) {
+                final p = sorted[idx];
+                return ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(
+                    radius: 14,
+                    backgroundColor: p.isHost ? AppColors.primary : AppColors.slate700,
+                    child: Text(p.initials, style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
+                  title: Text(
+                    p.isLocal ? '${p.name} (You)' : p.name,
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    p.isHost ? 'Host / Teacher' : (p.isHandRaised ? 'Hand Raised' : 'Student'),
+                    style: TextStyle(
+                      color: p.isHandRaised ? AppColors.warning : AppColors.slate400,
+                      fontSize: 10,
+                    ),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(p.isMicMuted ? Icons.mic_off : Icons.mic, size: 14, color: p.isMicMuted ? AppColors.error : AppColors.success),
+                      const SizedBox(width: 4),
+                      Icon(p.isCameraOff ? Icons.videocam_off : Icons.videocam, size: 14, color: p.isCameraOff ? AppColors.slate500 : AppColors.success),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDesktopHands(LiveClassRoomState roomState) {
+    final hands = roomState.participants.where((p) => p.isHandRaised).toList();
+
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.pan_tool, color: AppColors.warning, size: 16),
+              const SizedBox(width: 8),
+              Text(
+                'Hand Raise Queue (${hands.length})',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
+              ),
+            ],
+          ),
+          const Divider(color: Color(0xFF334155)),
+          Expanded(
+            child: hands.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No students raising hand currently',
+                      style: TextStyle(color: AppColors.slate400, fontSize: 12),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: hands.length,
+                    itemBuilder: (context, idx) {
+                      final p = hands[idx];
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0F172A),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppColors.warning,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                '#${idx + 1}',
+                                style: const TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    p.name,
+                                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                  const Text('Waiting to speak', style: TextStyle(color: AppColors.slate400, fontSize: 10)),
+                                ],
+                              ),
+                            ),
+                            if (roomState.isHost)
+                              ElevatedButton(
+                                onPressed: () {
+                                  ref.read(liveClassRoomProvider.notifier).allowStudentToSpeak(p.identity);
+                                  ref.read(liveClassRoomProvider.notifier).lowerStudentHand(p.identity);
+                                  _showToast(context, 'Granted speak rights to ${p.name}');
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.success,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                ),
+                                child: const Text('Allow to Speak', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDesktopPolls(LiveClassRoomState roomState) {
+    return const Padding(
+      padding: EdgeInsets.all(16),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.poll_outlined, color: AppColors.slate500, size: 40),
+            SizedBox(height: 12),
+            Text(
+              'No Active Poll',
+              style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 6),
+            Text(
+              'Teacher can launch live quick-polls during lecture to check comprehension.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.slate400, fontSize: 11),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDesktopDoubts(LiveClassRoomState roomState, dynamic user, String userName) {
+    return _buildDesktopChat(roomState, user, userName);
   }
 
   // Pre-join Green Room / Lobby Screen

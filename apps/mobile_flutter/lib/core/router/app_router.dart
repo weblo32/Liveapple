@@ -12,6 +12,7 @@ import '../../features/student/presentation/student_home_screen.dart';
 import '../../features/liveclass/presentation/live_classroom_screen.dart';
 import '../../features/learning/presentation/screens/recordings_screen.dart';
 import '../../features/learning/presentation/screens/assignments_screen.dart';
+import '../../features/learning/presentation/screens/study_material_screen.dart';
 import '../../features/learning/presentation/screens/cbt_tests_screen.dart';
 import '../../features/learning/presentation/screens/fees_screen.dart';
 import '../../features/learning/presentation/screens/attendance_screen.dart';
@@ -62,6 +63,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/assignments',
         builder: (context, state) => AssignmentsScreen(isTeacher: authState.user?.role == 'TEACHER'),
+      ),
+      GoRoute(
+        path: '/study-material',
+        builder: (context, state) => StudyMaterialScreen(isTeacher: authState.user?.role == 'TEACHER'),
       ),
       GoRoute(
         path: '/tests',
